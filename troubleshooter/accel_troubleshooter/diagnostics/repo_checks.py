@@ -102,10 +102,24 @@ def azd_env(ctx: DiagContext) -> CheckResult:
     missing = [v for v in keys.values() if not ctx.env.get(v)]
     placeholders = sorted(k for k, v in ctx.env.values.items() if PLACEHOLDER.search(v or ""))
     empty = sorted(k for k, v in ctx.env.values.items() if v == "" and not k.endswith(("KEY", "SECRET")))
-    status = WARN if missing else PASS
-    summary = f"azd env '{ctx.env.name}' loaded ({len(ctx.env.values)} keys)."
-    if missing:
-        summary += f" Missing expected keys: {missing}."
+    # Most keys (resource names, URLs) only exist after provisioning. Only these are needed beforehand, and azd
+    # also keeps the answers it prompted for in .azure/<env>/config.json (infra.parameters).
+    ai_param = ctx.profile.get("iac", {}).get("ai_location_param", "")
+    needed_now = {"subscription": keys.get("subscription"), "location": keys.get("location")}
+    missing_now = [k for k, v in needed_now.items() if v and not ctx.env.get(v)]
+    has_ai_region = bool(ctx.env.get(keys.get("ai_location")) or ctx.env.params.get(ai_param))
+    deployed = bool(ctx.env.get(keys.get("resource_group")))
+    status = WARN if missing_now else PASS
+    summary = f"azd env '{ctx.env.name}': " + (
+        "provisioning started (resource group recorded)." if deployed else "not deployed yet."
+    )
+    if missing_now:
+        summary += f" Not set: {missing_now}."
+    if not has_ai_region and not deployed:
+        summary += f" AI region not chosen yet (azd will ask, or: azd env set {keys.get('ai_location')} <region>)."
+    if deployed and missing:
+        summary += f" {len(missing)} output(s) not recorded yet (normal until provisioning finishes)."
+        status = INFO if status == PASS else status
     if placeholders:
         summary += (
             f" {len(placeholders)} placeholder value(s) — expected for post-provision outputs that are "
@@ -119,12 +133,14 @@ def azd_env(ctx: DiagContext) -> CheckResult:
         evidence={
             "env_name": ctx.env.name,
             "env_file": ctx.env.path,
+            "deployed": deployed,
+            "ai_region_chosen": has_ai_region,
             "missing_keys": missing,
             "placeholder_keys": placeholders,
             "empty_keys": empty,
             "subscription": ctx.env.get(keys.get("subscription")),
             "resource_group": ctx.env.get(keys.get("resource_group")),
-            "ai_location": ctx.env.get(keys.get("ai_location")) or None,
+            "ai_location": ctx.env.get(keys.get("ai_location")) or ctx.env.params.get(ai_param) or None,
         },
     )
 
@@ -203,6 +219,8 @@ def config_drift(ctx: DiagContext) -> CheckResult:
                 {
                     "severity": "low",
                     "id": "doc-regions-not-allowed",
+                    "short": f"{iac['quota_doc']} lists {len(not_allowed)} region(s) this template can't use "
+                    f"(e.g. {', '.join(not_allowed[:3])}).",
                     "message": f"{iac['quota_doc']} lists default regions {not_allowed} that are not in the "
                     f"@allowed list for {iac.get('ai_location_param')} {allowed_ai}; quota found there "
                     "cannot be used by this template.",
@@ -248,6 +266,8 @@ def config_drift(ctx: DiagContext) -> CheckResult:
                     {
                         "severity": "low",
                         "id": "script-regions-not-allowed",
+                        "short": f"{script.rsplit('/', 1)[-1]} default regions include {len(bad)} "
+                        f"the template can't use (e.g. {', '.join(bad[:3])}).",
                         "message": f"{script} default regions include {bad}, which are not allowed for "
                         f"{iac.get('ai_location_param')}.",
                         "refs": [ctx.doc_ref(script, "DEFAULT_REGIONS=")],

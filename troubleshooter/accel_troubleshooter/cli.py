@@ -9,13 +9,15 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from . import actions as actions_mod
-from . import telemetry
-from .azcli import AzRunner, OfflineRunner, ReplayRunner
+from . import runcmd, telemetry
+from .azcli import AzRunner, CommandNotAllowed, OfflineRunner, ReplayRunner
+from .compact import render_compact
 from .diagnostics import CHECKS
 from .engine import Troubleshooter
 from .knowledge import coverage, freshness
 from .models import APPROVAL_REQUIRED, RESTRICTED
 from .report import render_markdown
+from .textutil import build_issue, condense_log, read_multiline
 
 EXIT_OK, EXIT_FINDINGS, EXIT_CLARIFY, EXIT_ERROR = 0, 1, 2, 3
 
@@ -55,17 +57,45 @@ def _overrides(args) -> Dict[str, Any]:
     return o
 
 
-def _emit(args, d: Dict[str, Any], extra_md: str = "") -> None:
-    if args.format == "json":
+def _prompt_rg() -> str:
+    sys.stderr.write(
+        "\nNo resource group found for this azd environment (.azure/<env>/.env has no AZURE_RESOURCE_GROUP).\n"
+        "Resource group name (press Enter to skip the Azure resource checks): "
+    )
+    sys.stderr.flush()
+    return sys.stdin.readline().strip()
+
+
+def _diagnose(ts: Troubleshooter, args, text: str, **kw):
+    """Single entry point so every command resolves the resource group the same way (azd env first, else ask)."""
+    interactive = sys.stdin.isatty() and not getattr(args, "no_prompt", False)
+    kw.setdefault("overrides", _overrides(args))
+    return ts.diagnose(
+        text,
+        accelerator=args.accelerator,
+        env_name=args.env,
+        env_file=args.env_file,
+        prompt_rg=_prompt_rg if interactive else None,
+        **kw,
+    )
+
+
+def _emit(args, d: Dict[str, Any], kind: str = "diagnose", extra_md: str = "") -> None:
+    """Compact summary on screen (default). The complete report goes to --out, or print it with --format full."""
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    fmt = getattr(args, "format", "compact")
+    full = (extra_md + "\n\n" if extra_md else "") + render_markdown(d, verbose=getattr(args, "verbose", False))
+    if fmt == "json":
         text = json.dumps(d, indent=2, default=str)
+        full = text
+    elif fmt == "full":
+        text = full
     else:
-        text = (extra_md + "\n\n" if extra_md else "") + render_markdown(d, verbose=getattr(args, "verbose", False))
+        text = render_compact(d, kind, plain=getattr(args, "plain", False))
+    print(text)
     if args.out:
-        Path(args.out).write_text(text, encoding="utf-8")
-        print(f"Report written to {args.out}")
-    else:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        print(text)
+        Path(args.out).write_text(full, encoding="utf-8")
+        print(f"\nFull report saved to {args.out}")
 
 
 def _finish(ts: Troubleshooter, diag) -> int:
@@ -77,21 +107,41 @@ def _finish(ts: Troubleshooter, diag) -> int:
     return EXIT_FINDINGS if any(h.status in ("confirmed", "likely") for h in diag.hypotheses) else EXIT_OK
 
 
+def _issue_text(args) -> str:
+    """Issue from text, '-' (stdin), --log FILE, --from-clipboard, --last, or an interactive multi-line paste."""
+    stdin_text = sys.stdin.read() if args.issue == "-" else None
+    text = build_issue(
+        args.issue,
+        args.log,
+        stdin_text,
+        args.from_clipboard,
+        runcmd.last_log_path() if args.last else None,
+    )
+    if not text and sys.stdin.isatty():
+        text = condense_log(
+            read_multiline(
+                "Describe the problem, or paste the error output.\n"
+                "(finish with two empty lines, or Ctrl+Z then Enter on Windows / Ctrl+D elsewhere)"
+            )
+        )
+    return text
+
+
 # --------------------------------------------------------------------------- commands
 
 
 def cmd_diagnose(args) -> int:
+    text = _issue_text(args)
+    if not text:
+        print(
+            "Nothing to diagnose. Pass the problem as text, or use --log FILE, --from-clipboard, --last, or '-' "
+            "(stdin).",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
     ts = _ts(args)
     only = args.only.split(",") if args.only else None
-    diag = ts.diagnose(
-        args.issue,
-        accelerator=args.accelerator,
-        env_name=args.env,
-        env_file=args.env_file,
-        overrides=_overrides(args),
-        full=args.full,
-        only_checks=only,
-    )
+    diag = _diagnose(ts, args, text, full=args.full, only_checks=only)
     _emit(args, diag.to_dict())
     return _finish(ts, diag)
 
@@ -137,15 +187,14 @@ def cmd_quota(args) -> int:
     o = _overrides(args)
     o.setdefault("all_regions", not args.region)
     text = args.issue or "quota check: is there enough model quota to deploy?"
-    diag = ts.diagnose(
+    diag = _diagnose(
+        ts,
+        args,
         text,
-        accelerator=args.accelerator,
-        env_name=args.env,
-        env_file=args.env_file,
         overrides=o,
         only_checks=["repo.azd_env", "repo.config_drift", "az.context", "quota.models", "models.availability"],
     )
-    _emit(args, diag.to_dict(), extra_md=_quota_md(diag) if args.format != "json" else "")
+    _emit(args, diag.to_dict(), "quota", extra_md=_quota_md(diag))
     return _finish(ts, diag)
 
 
@@ -153,11 +202,10 @@ def cmd_preflight(args) -> int:
     ts = _ts(args)
     o = _overrides(args)
     o.setdefault("all_regions", True)
-    diag = ts.diagnose(
+    diag = _diagnose(
+        ts,
+        args,
         "pre-deployment preflight check before azd up",
-        accelerator=args.accelerator,
-        env_name=args.env,
-        env_file=args.env_file,
         overrides=o,
         only_checks=[
             "repo.azd_env",
@@ -176,19 +224,17 @@ def cmd_preflight(args) -> int:
         + "\n"
         + "\n".join(f"- `{c.check_id}`: {c.summary}" for c in blocking)
     )
-    _emit(args, diag.to_dict(), extra_md=verdict + "\n\n" + _quota_md(diag) if args.format != "json" else "")
+    _emit(args, diag.to_dict(), "preflight", extra_md=verdict + "\n\n" + _quota_md(diag))
     _finish(ts, diag)
     return EXIT_FINDINGS if blocking else EXIT_OK
 
 
 def cmd_compare(args) -> int:
     ts = _ts(args)
-    diag = ts.diagnose(
+    diag = _diagnose(
+        ts,
+        args,
         args.issue or "compare configuration with deployed state",
-        accelerator=args.accelerator,
-        env_name=args.env,
-        env_file=args.env_file,
-        overrides=_overrides(args),
         only_checks=[
             "repo.azd_env",
             "repo.config_drift",
@@ -200,6 +246,66 @@ def cmd_compare(args) -> int:
     )
     _emit(args, diag.to_dict())
     return _finish(ts, diag)
+
+
+def cmd_health(args) -> int:
+    """Full read-only health check of the current azd environment."""
+    ts = _ts(args)
+    diag = _diagnose(ts, args, "check my deployment health", full=True)
+    _emit(args, diag.to_dict())
+    return _finish(ts, diag)
+
+
+def cmd_run(args) -> int:
+    """Run a deployment/post-provision command, keep its output, and diagnose automatically when it fails."""
+    cmd = list(args.cmd)
+    if cmd and cmd[0] == "--":
+        cmd = cmd[1:]
+    if not cmd:
+        print("Usage: python -m accel_troubleshooter run -- <command>   e.g.  run -- azd up", file=sys.stderr)
+        return EXIT_ERROR
+    ts = _ts(args)
+    ident = ts.identify(" ".join(cmd), args.accelerator)
+    if not ident["confident"]:
+        print(ident["question"])
+        return EXIT_CLARIFY
+    accel = ident["accelerator"]
+    repo = ts.repo_for(accel)
+    if repo is None:
+        print(f"Repository for {accel} not found locally; pass --repo {accel}=<path>.", file=sys.stderr)
+        return EXIT_ERROR
+    capture = args.capture or not (args.passthrough or runcmd.wants_passthrough(cmd))
+    name = " ".join(cmd)
+    note = "output saved for diagnosis" if capture else "azd needs a real terminal, so output is not captured"
+    print(f"$ {name}    [{repo}; {note}]", file=sys.stderr)
+    try:
+        code, out = runcmd.run_command(cmd, repo, capture, runcmd.last_log_path())
+    except CommandNotAllowed as e:
+        print(f"Not run: {e}", file=sys.stderr)
+        return EXIT_ERROR
+    args.out = args.out or str(runcmd.last_log_path().with_name("last-report.md"))
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if code == 0:
+        print(f"\n✔ `{name}` finished (exit 0).")
+        if args.no_check:
+            return EXIT_OK
+        print("\nQuick health check of what is deployed so far:\n")
+        diag = _diagnose(ts, args, f"check my deployment health after `{name}` succeeded", full=True)
+        _emit(args, diag.to_dict())
+        steps = runcmd.next_steps(cmd, ts.profiles[accel])
+        if steps:
+            print("\nNEXT STEP (findings about images/agents above are expected until these have run):")
+            print("\n".join(f"  $ {s}" for s in steps))
+        return EXIT_OK
+    print(f"\n✖ `{name}` failed (exit {code}). Diagnosing from its output and from Azure...\n")
+    pasted = ""
+    if not capture and sys.stdin.isatty():
+        pasted = read_multiline(
+            "Paste the error text from above if you want it used (optional; press Enter twice to skip):"
+        )
+    diag = _diagnose(ts, args, f"`{name}` failed with exit code {code}. " + condense_log(out or pasted))
+    _emit(args, diag.to_dict())
+    return EXIT_FINDINGS
 
 
 def cmd_search(args) -> int:
@@ -332,9 +438,7 @@ def cmd_checks(args) -> int:
 def cmd_fix(args) -> int:
     ts = _ts(args)
     o = _overrides(args)
-    diag = ts.diagnose(
-        args.issue, accelerator=args.accelerator, env_name=args.env, env_file=args.env_file, overrides=o, full=args.full
-    )
+    diag = _diagnose(ts, args, args.issue, overrides=o, full=args.full)
     action = diag.actions.get(args.action_id)
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     if action is None:
@@ -400,15 +504,32 @@ def build_parser() -> argparse.ArgumentParser:
 
     def common(sp, issue_positional: bool = False, live: bool = True):
         if issue_positional:
-            sp.add_argument("issue", help="Issue description in natural language (quote it)")
+            sp.add_argument(
+                "issue",
+                nargs="?",
+                help="Problem in your own words (quote it), or '-' to read stdin. Omit it to be prompted.",
+            )
+            sp.add_argument("--log", metavar="FILE", help="Read the error from a log/output file (last 200 KB)")
+            sp.add_argument("--from-clipboard", action="store_true", help="Use the text currently on the clipboard")
+            sp.add_argument("--last", action="store_true", help="Use the output saved by the last 'run' command")
         sp.add_argument("--accelerator", help="Accelerator id (skip auto-identification)")
-        sp.add_argument("--format", choices=["md", "json"], default="md")
-        sp.add_argument("--out", help="Write report to file")
-        sp.add_argument("--verbose", action="store_true")
+        sp.add_argument(
+            "--format",
+            choices=["compact", "full", "json"],
+            default="compact",
+            help="compact (default, short summary), full (complete Markdown report), json",
+        )
+        sp.add_argument("--out", help="Save the FULL report to this file (summary is still printed)")
+        sp.add_argument("--verbose", action="store_true", help="Include raw check evidence in the full report")
+        sp.add_argument("--plain", action="store_true", help="ASCII status markers instead of emoji")
         if live:
             sp.add_argument("--env", help="azd environment name (default: .azure/config.json defaultEnvironment)")
             sp.add_argument("--env-file", help="Read azd-style KEY=VALUE values from this file instead of .azure/")
-            sp.add_argument("--resource-group", help="Resource group (overrides azd env)")
+            sp.add_argument(
+                "--resource-group",
+                help="Resource group (default: from the azd env in .azure/, else rg-<env>, else you are asked)",
+            )
+            sp.add_argument("--no-prompt", action="store_true", help="Never ask questions (for scripts/CI)")
             sp.add_argument("--region", help="AI services region (overrides azd env)")
             sp.add_argument("--subscription", help="Expected subscription id")
             g = sp.add_mutually_exclusive_group()
@@ -425,6 +546,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--capacity", action="append", metavar="PARAM=N", help="What-if capacity override (Bicep param name)"
     )
     d.set_defaults(func=cmd_diagnose)
+
+    h = sub.add_parser("health", help="Full read-only health check of the current azd environment")
+    common(h)
+    h.set_defaults(func=cmd_health)
+
+    r = sub.add_parser(
+        "run",
+        help="Run a command (azd up, post-provision scripts); on failure diagnose it automatically",
+        description="Example: run -- azd up    |    run -- infra\\scripts\\post-provision\\build_push_images.ps1",
+    )
+    common(r)
+    r.add_argument("--capture", action="store_true", help="Force output capture (may disable azd prompts)")
+    r.add_argument("--passthrough", action="store_true", help="Never capture output (keeps the real terminal)")
+    r.add_argument("--no-check", action="store_true", help="Skip the health check after a successful run")
+    r.add_argument("cmd", nargs=argparse.REMAINDER, help="-- <command and arguments>")
+    r.set_defaults(func=cmd_run)
 
     q = sub.add_parser("quota", help="End-to-end quota workflow (requirements → live quota → recommendation)")
     common(q)

@@ -67,6 +67,15 @@ _ERR_SUFFIX = re.compile(
     r"Canceled|Active|Timeout|Deprecated|NotPermitted))\b"
 )
 _CODE_FIELD = re.compile(r"[\"']?code[\"']?\s*[:=]\s*[\"']?([A-Za-z][A-Za-z0-9_.]{3,})", re.I)
+# azd / az CLI output forms: "ERROR: (InsufficientQuota) ...", and a line that starts with "InsufficientQuota: ..."
+_PAREN_CODE = re.compile(r"\(([A-Z][A-Za-z]{7,})\)")
+_LINE_CODE = re.compile(r"(?m)^\s*(?:ERROR:\s*)?([A-Z][A-Za-z]{7,}):\s")
+
+
+def _codeish(token: str) -> bool:
+    return sum(1 for ch in token if ch.isupper()) >= 2 and not token.startswith(("Azure", "Microsoft", "PowerShell"))
+
+
 _HTTP = re.compile(
     r"(?:HTTP|status|error|returns?|returning|code|got|response)\D{0,15}\b([45]\d\d)\b|"
     r"\b([45]\d\d)\s*(?:error|errors|response|status|unauthori[sz]ed|forbidden|too many|internal|bad gateway|"
@@ -110,6 +119,7 @@ def extract(text: str, known_error_codes: Iterable[str] = ()) -> IssueContext:
             codes.append(code)
     codes += _ERR_SUFFIX.findall(text)
     codes += [c for c in _CODE_FIELD.findall(text) if not c.isdigit()]
+    codes += [c for c in _PAREN_CODE.findall(text) + _LINE_CODE.findall(text) if _codeish(c)]
     ctx.error_codes = _uniq(codes)
     ctx.http_statuses = _uniq(int(a or b) for a, b in _HTTP.findall(text))
     low = text.lower()

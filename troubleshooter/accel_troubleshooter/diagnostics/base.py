@@ -6,7 +6,7 @@ import time
 import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..azcli import AzRunner, CommandNotAllowed
 from ..knowledge import KnowledgeIndex
@@ -56,30 +56,57 @@ class DiagContext:
     overrides: Dict[str, Any] = field(default_factory=dict)
     facts: Dict[str, Any] = field(default_factory=dict)
     results: Dict[str, CheckResult] = field(default_factory=dict)
+    _rg: Optional[Tuple[str, str]] = None
 
-    # ---- resolved targets (explicit override > azd env > issue text) ----
+    # ---- resolved targets (explicit override > azd env > convention > tag > prompt) ----
     def env_key(self, logical: str) -> Optional[str]:
         return self.profile.get("azd_env_keys", {}).get(logical)
 
-    @property
-    def resource_group(self) -> str:
+    def _static_rg(self) -> Tuple[str, str]:
+        """Resource group from the flag, the azd env or the issue text. No Azure calls, no prompting."""
         if self.overrides.get("resource_group"):
-            return self.overrides["resource_group"]
-        val = self.env.get(self.env_key("resource_group"))
-        if val:
-            return val
+            return self.overrides["resource_group"], "--resource-group argument"
+        for key in (self.env_key("resource_group"), "RESOURCE_GROUP_NAME"):
+            val = self.env.get(key)
+            if val:
+                return val, f"azd env '{self.env.name}' ({key})"
         for n in self.issue.resource_names:
             if n.lower().startswith("rg-"):
-                return n
-        return ""
+                return n, "issue text"
+        return "", "unknown"
+
+    def resolve_resource_group(self, prompt: Optional[Callable[[], str]] = None) -> None:
+        """Resolve once: flag, azd env, issue text, 'rg-<env>' if it exists, azd-env-name tag, then prompt."""
+        if self._rg is not None:
+            return
+        name, source = self._static_rg()
+        if not name and self.env.name and self.runner.mode != "offline":
+            cand = f"rg-{self.env.name}"
+            ok, exists, _ = self.az("group", "exists", "--name", cand)
+            if ok and exists is True:
+                name, source = cand, f"azd naming convention rg-<env> (exists in Azure, env '{self.env.name}')"
+            else:
+                ok, groups, _ = self.az("group", "list")
+                tagged = [
+                    g["name"]
+                    for g in (groups if ok and isinstance(groups, list) else [])
+                    if (g.get("tags") or {}).get("azd-env-name") == self.env.name
+                ]
+                if len(tagged) == 1:
+                    name, source = tagged[0], f"resource group tag azd-env-name={self.env.name}"
+        if not name and prompt is not None:
+            answer = (prompt() or "").strip()
+            if answer:
+                name, source = answer, "entered by you"
+        self._rg = (name, source)
+
+    @property
+    def resource_group(self) -> str:
+        return (self._rg or self._static_rg())[0]
 
     @property
     def resource_group_source(self) -> str:
-        if self.overrides.get("resource_group"):
-            return "--resource-group argument"
-        if self.env.get(self.env_key("resource_group")):
-            return f"azd env '{self.env.name}'"
-        return "issue text" if self.resource_group else "unknown"
+        return (self._rg or self._static_rg())[1]
 
     @property
     def ai_region(self) -> str:

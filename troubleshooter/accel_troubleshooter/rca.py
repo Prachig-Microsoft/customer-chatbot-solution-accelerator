@@ -431,6 +431,30 @@ def partial_deployment(ctx):
     if not missing and not bad:
         return []
     acts = [build_action("azd-provision", ctx.profile, doc_refs=[ctx.ref("deployment", "Recover from Failed")])]
+    empty = ctx.facts.get("resources") == [] and ctx.facts.get("deployments") == [] and not bad
+    if empty:
+        # Nothing exists yet: provisioning has not started creating resources (or has only just started).
+        return [
+            (
+                Hypothesis(
+                    "resource-group-empty",
+                    "The resource group exists but nothing has been deployed into it yet",
+                    LIKELY,
+                    "medium",
+                    [
+                        "0 resources and no ARM deployment records in the resource group (live)",
+                        "normal in the first minutes of 'azd up'; otherwise azd stopped before creating anything",
+                    ],
+                    supporting_checks=["resources.state", "deploy.operations"],
+                    contradicting=["azd up may simply still be starting — wait a few minutes and re-run this check"],
+                    missing_evidence=["the azd up output (use: run -- azd up, or diagnose --from-clipboard)"],
+                    remediation_ids=[a.id for a in acts],
+                    doc_refs=[ctx.ref("deployment", "Recover from Failed")],
+                    component="Infrastructure",
+                ),
+                acts,
+            )
+        ]
     rationale = ([f"expected resource types absent: {missing}"] if missing else []) + (
         [f"resources not Succeeded: {[(b['name'], b['state']) for b in bad]}"] if bad else []
     )

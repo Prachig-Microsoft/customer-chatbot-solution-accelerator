@@ -13,17 +13,65 @@ The core uses only the Python standard library. No hosted model, vector database
 
 ```powershell
 cd troubleshooter
-python -m accel_troubleshooter diagnose "My deployment failed with a quota exceeded error"   # live, read-only
-python -m accel_troubleshooter quota                       # end-to-end quota workflow, all allowed AI regions
-python -m accel_troubleshooter preflight                   # GO / NO-GO before azd up
-python -m accel_troubleshooter search "InsufficientQuota"  # cited doc retrieval
-python -m accel_troubleshooter eval                        # regression / evaluation suite (no Azure needed)
-./demo.ps1                                                 # reproducible demo (add -Live for live Azure parts)
+
+# 1. Before deploying: GO / NO-GO + quota (about 30 lines)
+python -m accel_troubleshooter preflight
+
+# 2. Deploy through the wrapper: output is saved; if it fails you get a diagnosis automatically
+python -m accel_troubleshooter run -- azd up
+python -m accel_troubleshooter run -- infra\scripts\post-provision\build_push_images.ps1
+python -m accel_troubleshooter run -- infra\scripts\post-provision\postprovision_data_agents.ps1
+
+# 3. Any time: describe the problem, or paste the error. All of these work:
+python -m accel_troubleshooter diagnose "chat returns 500 errors"
+python -m accel_troubleshooter diagnose                      # prompts; paste a multi-line error, then Enter twice
+python -m accel_troubleshooter diagnose --from-clipboard     # use what you just copied
+python -m accel_troubleshooter diagnose --log deploy.log     # or a saved log file
+python -m accel_troubleshooter diagnose --last               # output of the last `run`
+Get-Content deploy.log | python -m accel_troubleshooter diagnose -      # stdin
+
+python -m accel_troubleshooter health                        # full read-only health check of the current azd env
+python -m accel_troubleshooter quota                         # quota table for every allowed AI region
+python -m accel_troubleshooter search "InsufficientQuota"    # cited doc retrieval
+python -m accel_troubleshooter eval                          # regression / evaluation suite (no Azure needed)
+./demo.ps1                                                   # reproducible demo (add -Live for live Azure parts)
 ```
+
+### Resource group: automatic, then asks
+
+Every command that needs a resource group finds it the same way, and prints where it came from on the `Target:` line:
+
+1. `--resource-group` if you pass it
+2. `AZURE_RESOURCE_GROUP` in the current azd environment (`.azure/<env>/.env`, env chosen by `.azure/config.json`)
+3. an `rg-...` name in the error text you pasted
+4. `rg-<azd env name>` if it exists in Azure (azd's naming convention)
+5. a resource group tagged `azd-env-name=<env>`
+6. otherwise **it asks you** ("Resource group name (Enter to skip)"). `--no-prompt`, CI and the MCP server never ask;
+   they list the resource group under "Still needed" instead.
+
+### Output
+
+The default output is a compact summary (verdict or likely cause, one line per check, quota, top findings with their
+evidence and doc references, next commands, what is still missing). `--format full` prints the complete Markdown report,
+`--out report.md` saves the complete report while still printing the summary, `--format json` is for tooling, and
+`--plain` swaps emoji for ASCII markers.
+
+### `run -- <command>`
+
+Runs `azd`, `az`, `pwsh`/`bash`, or a `.ps1`/`.sh` script inside the accelerator repo (nothing else), in the repo root.
+Output is saved to `.runs/last-run.log`.
+
+- On **failure** it diagnoses from the captured error text plus live Azure state, and saves the full report to
+  `.runs/last-report.md`.
+- On **success** it runs a quick health check and prints the next script to run, taken from the accelerator profile.
+  Findings about placeholder images or missing agents are expected until those scripts have run.
+- `azd up`/`provision` need a real terminal for their prompts, so their output is **not** captured: the diagnosis then
+  reads the failure from Azure (deployment operations carry the real error codes) and offers to take pasted error text.
+  Use `--capture` to force capture, `--passthrough` to never capture, `--no-check` to skip the post-run check.
 
 Useful options: `--resource-group`, `--region`, `--env <azd env>`, `--env-file <file>`, `--accelerator <id>`,
 `--offline` (docs + repo only), `--replay <fixture.json>`, `--record <fixture.json>` (sanitized + anonymized),
-`--capacity gptDeploymentCapacity=80` (what-if), `--full` (run every check), `--only a,b`, `--format json`, `--out file`.
+`--capacity gptDeploymentCapacity=80` (what-if), `--full` (run every check), `--only a,b`, `--no-prompt`.
 Exit codes: `0` no supported root cause, `1` findings, `2` clarification needed, `3` error.
 
 ## Supported accelerators

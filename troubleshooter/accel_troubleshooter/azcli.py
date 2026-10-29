@@ -28,6 +28,7 @@ READ_ONLY_PREFIXES = [
     "ad signed-in-user show",
     "group show",
     "group exists",
+    "group list",
     "deployment group list",
     "deployment group show",
     "deployment operation group list",

@@ -6,7 +6,7 @@ import time
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from . import rca, telemetry
 from .azcli import AzRunner, OfflineRunner
@@ -14,9 +14,22 @@ from .classify import classify, extract, identify_accelerator
 from .diagnostics import CHECKS, DiagContext, run_check
 from .knowledge import KnowledgeIndex, freshness, load_or_build
 from .models import Action, CheckResult, DocPassage, Hypothesis, IssueContext
-from .repo import DEFAULT_WORKSPACE, git_info, load_azd_env, load_env_file, load_profiles, resolve_repo
+from .repo import DEFAULT_WORKSPACE, AzdEnv, git_info, load_azd_env, load_env_file, load_profiles, resolve_repo
 
 ALWAYS = ["repo.azd_env", "repo.config_drift", "az.context"]
+# Checks that need a resource group (the group is resolved once, up front, so a prompt happens at most once).
+NEEDS_RG = {
+    "rg.state",
+    "deploy.operations",
+    "resources.state",
+    "activity.failures",
+    "ai.deployments",
+    "network.public_access",
+    "webapp.state",
+    "webapp.health",
+    "rbac.app_identity",
+    "rbac.deployer_data",
+}
 DEPENDS = {
     "rbac.app_identity": ["webapp.state"],
     "webapp.health": ["webapp.state"],
@@ -136,6 +149,7 @@ class Troubleshooter:
         only_checks: Optional[List[str]] = None,
         log: bool = True,
         env_file: Optional[str] = None,
+        prompt_rg: Optional[Callable[[], str]] = None,
     ) -> Diagnosis:
         t0 = time.time()
         diag = Diagnosis(
@@ -194,11 +208,17 @@ class Troubleshooter:
         classify(issue, code_cats)
         diag.issue = issue
 
-        env = load_env_file(Path(env_file)) if env_file else load_azd_env(repo, env_name)
+        if env_file == "none":  # evaluation/tests: never read the developer's real .azure folder
+            env = AzdEnv()
+        else:
+            env = load_env_file(Path(env_file)) if env_file else load_azd_env(repo, env_name)
         ctx = DiagContext(
             profile=profile, repo=repo, issue=issue, env=env, runner=self.runner, index=idx, overrides=overrides or {}
         )
-        for cid in self.plan_checks(issue, full, only_checks):
+        planned = self.plan_checks(issue, full, only_checks)
+        if self.runner.mode != "offline" and any(c in NEEDS_RG for c in planned):
+            ctx.resolve_resource_group(prompt_rg)
+        for cid in planned:
             run_check(CHECKS[cid], ctx)
         diag.checks = list(ctx.results.values())
         diag.targets = {
@@ -236,6 +256,9 @@ class Troubleshooter:
         env_file: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Re-run an action's verification checks and compare with the pre-fix results."""
+        rg = diag.targets.get("resource_group")
+        if rg and not (overrides or {}).get("resource_group"):
+            overrides = {**(overrides or {}), "resource_group": rg}  # keep a group the user typed at the prompt
         before = {c.check_id: c.status for c in diag.checks}
         after = self.diagnose(
             diag.issue.raw_text,

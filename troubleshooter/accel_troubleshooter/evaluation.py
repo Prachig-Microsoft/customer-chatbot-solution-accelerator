@@ -74,7 +74,7 @@ def run_case(case: Dict[str, Any], fixtures: Dict[str, Dict[str, Any]], workspac
         runner = ReplayRunner(_apply_patch(fixtures[case["fixture"]], case))
     ws = (EVAL_DIR / case["workspace"]).resolve() if case.get("workspace") else workspace
     ts = Troubleshooter(ws, runner)
-    env_file = str(EVAL_DIR / "fixtures" / case["env_file"]) if case.get("env_file") else None
+    env_file = str(EVAL_DIR / "fixtures" / case["env_file"]) if case.get("env_file") else "none"
     start = time.time()
     diag = ts.diagnose(
         case["issue"],

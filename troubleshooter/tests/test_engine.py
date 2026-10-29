@@ -98,7 +98,7 @@ def test_verify_reports_before_and_after(synthetic_fixture, synthetic_env_file):
 
 def test_partial_profile_reports_limitation():
     ts = Troubleshooter(REPO_ROOT, ReplayRunner({"commands": {}}))
-    d = ts.diagnose("content processing deployment failed with InsufficientQuota", log=False)
+    d = ts.diagnose("content processing deployment failed with InsufficientQuota", log=False, env_file="none")
     assert d.accelerator["id"] == "content-processing"
     assert any("not yet implemented" in x for x in d.limitations)
     assert all("docs/" in r or r.startswith("infra/") for h in d.hypotheses for r in h.doc_refs if r)
