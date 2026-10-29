@@ -105,6 +105,7 @@ def azd_env(ctx: DiagContext) -> CheckResult:
     # Most keys (resource names, URLs) only exist after provisioning. Only these are needed beforehand, and azd
     # also keeps the answers it prompted for in .azure/<env>/config.json (infra.parameters).
     ai_param = ctx.profile.get("iac", {}).get("ai_location_param", "")
+    iac_loc_param = ctx.profile.get("iac", {}).get("location_param", "")
     needed_now = {"subscription": keys.get("subscription"), "location": keys.get("location")}
     missing_now = [k for k, v in needed_now.items() if v and not ctx.env.get(v)]
     has_ai_region = bool(ctx.env.get(keys.get("ai_location")) or ctx.env.params.get(ai_param))
@@ -141,6 +142,7 @@ def azd_env(ctx: DiagContext) -> CheckResult:
             "subscription": ctx.env.get(keys.get("subscription")),
             "resource_group": ctx.env.get(keys.get("resource_group")),
             "ai_location": ctx.env.get(keys.get("ai_location")) or ctx.env.params.get(ai_param) or None,
+            "location": ctx.env.get(keys.get("location")) or ctx.env.params.get(iac_loc_param) or None,
         },
     )
 
@@ -298,7 +300,12 @@ def config_drift(ctx: DiagContext) -> CheckResult:
         "IaC vs docs vs scripts vs azd env consistency",
         status,
         summary,
-        evidence={"findings": findings, "effective_models": reqs, "allowed_ai_regions": allowed_ai},
+        evidence={
+            "findings": findings,
+            "effective_models": reqs,
+            "allowed_ai_regions": allowed_ai,
+            "allowed_locations": ctx.facts.get("allowed_locations", []),
+        },
     )
 
 

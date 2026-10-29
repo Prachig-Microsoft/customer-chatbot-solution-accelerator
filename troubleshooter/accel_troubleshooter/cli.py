@@ -200,6 +200,11 @@ def cmd_quota(args) -> int:
 
 def cmd_preflight(args) -> int:
     ts = _ts(args)
+    if args.format != "json":
+        print(
+            "Checking login, providers, quota in every allowed region and model availability (about 30 s)...",
+            file=sys.stderr,
+        )
     o = _overrides(args)
     o.setdefault("all_regions", True)
     diag = _diagnose(

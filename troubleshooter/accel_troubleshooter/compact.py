@@ -73,7 +73,108 @@ def _quota_lines(qc: Dict[str, Any], plain: bool) -> List[str]:
     return out
 
 
+def _recommend_region(d: Dict[str, Any]) -> Dict[str, Any]:
+    """Pick the AI region: keep the user's choice if it has quota, else the best region with quota for every model."""
+    env_ev = (_check(d, "repo.azd_env") or {}).get("evidence", {})
+    qev = (_check(d, "quota.models") or {}).get("evidence", {})
+    regions = qev.get("regions") or {}
+    cands = qev.get("regions_with_sufficient_quota") or []
+    locs = (_check(d, "repo.config_drift") or {}).get("evidence", {}).get("allowed_locations") or []
+    chosen = env_ev.get("ai_location")
+
+    def headroom(region: str) -> int:  # per-region (Classic) quota is what differs between regions
+        return sum(m["available"] or 0 for m in regions[region]["models"] if m["scope"] != "Global")
+
+    ranked = sorted(cands, key=lambda r: (headroom(r), r in locs), reverse=True)
+    if chosen and chosen in cands:
+        region, why = chosen, "your azd env choice, quota OK"
+    elif chosen and chosen in regions:
+        if ranked:
+            region, why = ranked[0], f"{chosen} (your choice) is short on quota; {ranked[0]} has enough"
+        else:
+            region, why = chosen, "short on quota here and in every allowed region (Global quota is shared)"
+    elif ranked:
+        region, why = ranked[0], "best free quota" + (", also a valid primary location" if ranked[0] in locs else "")
+    else:
+        region, why = None, "no allowed region has enough quota"
+    others = [r for r in ranked if r != region]
+    return {"region": region, "why": why, "others": others, "chosen": chosen, "locations": locs, "env": env_ev}
+
+
+def render_preflight(d: Dict[str, Any], plain: bool = False) -> str:
+    """The pre-deployment answer in about 12 lines: verdict, where to deploy, quota there, blockers, next commands."""
+    icons = _PLAIN if plain else _ICONS
+    a = d.get("accelerator", {})
+    sub = (_check(d, "az.context") or {}).get("evidence", {}).get("subscription_name") or "?"
+    blocking = [c for c in d["checks"] if c["status"] in ("fail", "error")]
+    rec = _recommend_region(d)
+    verdict = ("NO-GO" if plain else "🛑 NO-GO") if blocking else ("GO" if plain else "✅ GO")
+    out = [f"PREFLIGHT: {verdict}      {a.get('id', '?')} · subscription {sub} · {d['duration_ms'] / 1000:.0f}s", ""]
+
+    region = rec["region"]
+    out.append(f"AI region         {region or 'none usable'}   ({rec['why']})")
+    env_ev = rec["env"]
+    loc = env_ev.get("location")
+    if loc:
+        out.append(f"Primary location  {loc}   (your azd env)")
+    elif rec["locations"]:
+        out.append(f"Primary location  any of: {', '.join(rec['locations'])}")
+    qev = (_check(d, "quota.models") or {}).get("evidence", {})
+    rows = (qev.get("regions") or {}).get(region or "", {}).get("models", []) if region else []
+    if rows:
+        parts = [f"{r['model']} need {r['capacity']}/free {r['available']}{'' if r['ok'] else ' ❌'}" for r in rows]
+        out.append("Quota (K TPM)     " + " · ".join(parts))
+    if rec["others"]:
+        out.append(f"Other OK regions  {', '.join(rec['others'])}")
+    out.append("")
+
+    names = {
+        "az.context": "login",
+        "providers.registration": "providers",
+        "quota.models": "quota",
+        "models.availability": "models/SKUs",
+        "repo.git_changes": "no local edits",
+    }
+    line = []
+    for cid, label in names.items():
+        c = _check(d, cid)
+        if c and c["status"] != "skip":
+            line.append(f"{icons[c['status']].strip()} {label}")
+    out.append("Checks            " + "  ".join(line))
+    if blocking:
+        out.append("Blocking")
+        for c in blocking[:4]:
+            out.append(f"  ✗ {SHORT.get(c['check_id'], c['title'])}: {_t(c['summary'], 100)}")
+    else:
+        out.append("Blocking          none")
+    notes = (_check(d, "repo.config_drift") or {}).get("evidence", {}).get("findings", [])
+    if notes:
+        first = _t(notes[0].get("short") or notes[0]["message"], 80)
+        out.append(f"Heads-up          {len(notes)} doc/script note(s), not blocking: {first}")
+    out.append("")
+
+    steps: List[str] = []
+    if not blocking and region:
+        if not env_ev.get("env_name"):
+            steps += ["azd env new <name>", f"azd env set AZURE_ENV_AI_SERVICE_LOCATION {region}"]
+        elif env_ev.get("ai_location") != region:
+            steps.append(f"azd env set AZURE_ENV_AI_SERVICE_LOCATION {region}")
+        steps.append("python -m accel_troubleshooter run -- azd up")
+    else:
+        for act in sorted(d.get("actions", {}).values(), key=lambda x: _CAT_ORDER[x["category"]])[:2]:
+            runnable = act["category"] in (READ_ONLY, APPROVAL_REQUIRED) and act["commands"]
+            steps.append(_t(act["commands"][0], 100) if runnable else f"{act['title']} (manual; see --format full)")
+        steps.append("fix the blockers above, then run preflight again")
+    out.append("Next              " + steps[0])
+    out += [f"                  {s}" for s in steps[1:]]
+    out.append("")
+    out.append("More: --format full | --out report.md")
+    return "\n".join(out)
+
+
 def render_compact(d: Dict[str, Any], kind: str = "diagnose", plain: bool = False, max_findings: int = 3) -> str:
+    if kind == "preflight" and not d.get("clarification"):
+        return render_preflight(d, plain)
     icons = _PLAIN if plain else _ICONS
     a = d.get("accelerator", {})
     out: List[str] = []

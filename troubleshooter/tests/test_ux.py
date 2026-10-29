@@ -155,20 +155,80 @@ def _diag(synthetic_fixture, synthetic_env_file, text, **kw):
     return ts.diagnose(text, env_file=synthetic_env_file, log=False, **kw)
 
 
-def test_compact_preflight_is_short_and_collapses_global_quota(synthetic_fixture, synthetic_env_file):
-    d = _diag(
-        synthetic_fixture,
-        synthetic_env_file,
+PREFLIGHT_CHECKS = ["repo.azd_env", "repo.config_drift", "az.context", "quota.models", "models.availability"]
+
+
+def _preflight(fixture, env_file, **kw):
+    ts = Troubleshooter(REPO_ROOT, ReplayRunner(fixture))
+    d = ts.diagnose(
         "pre-deployment preflight check before azd up",
+        env_file=env_file,
+        log=False,
         overrides={"all_regions": True},
-        only_checks=["repo.azd_env", "repo.config_drift", "az.context", "quota.models", "models.availability"],
+        only_checks=PREFLIGHT_CHECKS,
+        **kw,
     )
-    text = render_compact(d.to_dict(), "preflight")
-    assert len(text.splitlines()) <= 30, text
-    assert "VERDICT  ✅ GO" in text and "azd up" in text
-    assert text.count("gpt-5.4-mini") == 1 and "Global pool, same in every region" in text
-    assert "per region:" in text  # gpt-realtime-mini is per-region (Classic)
-    assert "NOTES" in text  # config-drift findings are shown, not hidden
+    return render_compact(d.to_dict(), "preflight"), d
+
+
+def test_preflight_go_is_a_short_answer_with_a_recommended_region(synthetic_fixture, synthetic_env_file):
+    text, _ = _preflight(synthetic_fixture, synthetic_env_file)
+    lines = text.splitlines()
+    assert len(lines) <= 14, text
+    assert lines[0].startswith("PREFLIGHT: ✅ GO")
+    assert "AI region         eastus2   (your azd env choice, quota OK)" in text
+    assert "Quota (K TPM)" in text and "need 50/free 900" in text
+    assert "Blocking          none" in text and "Other OK regions" in text
+    assert "run -- azd up" in text and "azd env set" not in text  # region already chosen: nothing to set
+
+
+def test_preflight_recommends_best_region_when_none_chosen(synthetic_fixture, tmp_path):
+    env = tmp_path / "demo.env"
+    env.write_text('AZURE_SUBSCRIPTION_ID="00000000-0000-0000-0000-00000000aaaa"\n', encoding="utf-8")
+    text, _ = _preflight(synthetic_fixture, str(env))
+    assert "(best free quota" in text
+    assert "azd env set AZURE_ENV_AI_SERVICE_LOCATION " in text and "run -- azd up" in text
+
+
+def test_preflight_no_go_lists_blockers_and_does_not_tell_you_to_deploy(synthetic_fixture, synthetic_env_file):
+    fx = _fixture(
+        synthetic_fixture,
+        **{
+            "cognitiveservices usage list --location *": {
+                "exit_code": 0,
+                "stdout": [
+                    {
+                        "name": {"value": "OpenAI.GlobalStandard.gpt-5.4-mini"},
+                        "currentValue": 990.0,
+                        "limit": 1000.0,
+                        "scopeType": "Global",
+                    },
+                    {
+                        "name": {"value": "OpenAI.GlobalStandard.text-embedding-3-small"},
+                        "currentValue": 0.0,
+                        "limit": 3000.0,
+                        "scopeType": "Global",
+                    },
+                    {
+                        "name": {"value": "OpenAI.GlobalStandard.gpt-realtime-mini"},
+                        "currentValue": 0.0,
+                        "limit": 20.0,
+                        "scopeType": "Classic",
+                    },
+                ],
+            }
+        },
+    )
+    text, _ = _preflight(fx, synthetic_env_file)
+    assert text.splitlines()[0].startswith("PREFLIGHT: 🛑 NO-GO")
+    assert "Blocking\n  ✗ model quota" in text and "need 50, available 10" in text
+    assert "run -- azd up" not in text and "fix the blockers" in text
+
+
+def test_preflight_plain_mode_has_no_emoji(synthetic_fixture, synthetic_env_file):
+    d = _preflight(synthetic_fixture, synthetic_env_file)[1]
+    text = render_compact(d.to_dict(), "preflight", plain=True)
+    assert text.startswith("PREFLIGHT: GO") and "✅" not in text and "[ OK ]" in text
 
 
 def test_compact_diagnose_leads_with_cause_evidence_and_next_step(synthetic_fixture, synthetic_env_file):
