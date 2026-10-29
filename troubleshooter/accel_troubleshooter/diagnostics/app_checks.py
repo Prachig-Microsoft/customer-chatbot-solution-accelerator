@@ -189,7 +189,13 @@ def webapp_health(ctx: DiagContext) -> CheckResult:
         "webapp.health",
         title,
         FAIL if failing else PASS,
-        f"Failing: {failing}" if failing else f"{len(rows)} endpoint(s) healthy.",
+        (
+            f"Failing: {failing}"
+            if failing
+            else f"{len(rows)} endpoint(s) respond"
+            + (" (config-only check)" if ctx.profile.get("health_is_shallow") else "")
+            + "."
+        ),
         evidence={"probes": rows},
     )
 

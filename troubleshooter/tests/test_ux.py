@@ -183,6 +183,52 @@ def test_old_missing_resources_are_still_reported_as_partial(synthetic_fixture, 
     assert d.hypotheses[0].id == "partial-deployment"
 
 
+def test_arm_quota_failure_uses_the_numbers_in_azures_own_error(synthetic_fixture, synthetic_env_file):
+    """Real failure captured live: configured capacity (50K) fits today, but the failed request asked for 5000."""
+    msg = (
+        "Not enough quota is available to create this deployment. The deployment requires 5000 quota units, but only "
+        "338 quota units are available in One Thousand Tokens Per Minute - gpt-5.4-mini - GlobalStandard. "
+        "Current usage: 662 / 1000 quota units."
+    )
+    fx = _fixture(
+        synthetic_fixture,
+        **{
+            "deployment group list --resource-group rg-demo": {
+                "exit_code": 0,
+                "stdout": [
+                    {"name": "ts-quota-test", "properties": {"provisioningState": "Failed", "timestamp": _now_iso(200)}}
+                ],
+            },
+            "deployment operation group list --resource-group rg-demo --name ts-quota-test": {
+                "exit_code": 0,
+                "stdout": [
+                    {
+                        "properties": {
+                            "provisioningState": "Failed",
+                            "timestamp": _now_iso(200),
+                            "targetResource": {
+                                "resourceType": "Microsoft.CognitiveServices/accounts/deployments",
+                                "resourceName": "aif-demo/troubleshooter-quota-test",
+                            },
+                            "statusMessage": {"error": {"code": "InsufficientQuota", "message": msg}},
+                        }
+                    }
+                ],
+            },
+        },
+    )
+    ts = Troubleshooter(REPO_ROOT, ReplayRunner(fx))
+    d = ts.diagnose("my deployment failed", env_file=synthetic_env_file, log=False)
+    top = d.hypotheses[0]
+    assert top.id == "quota-insufficient" and top.status == "confirmed" and top.confidence == "high"
+    text = " ".join(top.rationale)
+    assert "requested 5000, available 338" in text and "differs from the configured capacity (50K)" in text
+    assert not top.contradicting
+    assert not any("Exact error code" in m for m in d.missing_evidence)
+    assert not any("Approximate time" in m for m in d.missing_evidence)
+    assert "RESULT" not in render_compact(d.to_dict()) and "LIKELY CAUSE" in render_compact(d.to_dict())
+
+
 def test_empty_resource_group_is_not_called_a_failure(synthetic_fixture, synthetic_env_file):
     fx = _fixture(
         synthetic_fixture,
@@ -409,6 +455,26 @@ def test_azd_interactive_commands_keep_the_real_terminal():
     assert not runcmd.wants_passthrough(["azd", "up", "--no-prompt"])
     assert not runcmd.wants_passthrough([r"infra\scripts\post-provision\build_push_images.ps1"])
     assert runcmd.wants_passthrough(["azd", "env", "get-values"])
+
+
+def test_run_command_survives_characters_the_console_cannot_print(tmp_path, monkeypatch):
+    class Cp1252Console(io.StringIO):
+        encoding = "cp1252"
+
+        def write(self, s):
+            s.encode("cp1252")  # raises UnicodeEncodeError like a real legacy console
+            return super().write(s)
+
+    monkeypatch.setattr(sys, "stdout", Cp1252Console())
+    log = tmp_path / "last.log"
+    code, out = runcmd.run_command(
+        [sys.executable, "-c", "import sys; sys.stdout.buffer.write('ok \\u2713 done\\n'.encode('utf-8'))"],
+        tmp_path,
+        True,
+        log,
+        allowed=frozenset({"python"}),
+    )
+    assert code == 0 and "done" in out and "done" in log.read_text(encoding="utf-8")
 
 
 def test_run_command_captures_output_exit_code_and_log(tmp_path, capsys):

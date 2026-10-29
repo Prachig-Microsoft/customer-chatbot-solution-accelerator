@@ -66,6 +66,8 @@
     {"id": "scenario-web", "role": "frontend", "name_env": "SCENARIO_WEB_APP_NAME", "url_env": "SCENARIO_WEB_APP_URL"}
   ],
   "placeholder_image_markers": ["containerapps-helloworld"],
+  "health_is_shallow": true,
+  "health_is_shallow_ref": "chat-app/backend/app/main.py:194 (/health reports 'connected' if COSMOS_DB_ENDPOINT is set; it never calls Cosmos)",
   "placeholder_image_ref": "infra/bicep/main.bicep:378",
   "post_provision": {
     "build_images": {"ps1": "infra/scripts/post-provision/build_push_images.ps1", "sh": "infra/scripts/post-provision/build_push_images.sh", "doc": "documents/DeploymentGuide.md (5.3 Build Container Images and Initialize Data and Agents)"},

@@ -92,12 +92,25 @@ def run_command(
         bufsize=1,
     )
     assert proc.stdout is not None
+    show = True  # display is best-effort: a console that cannot show a character must never kill the child run
     try:
         for line in proc.stdout:
-            sys.stdout.write(line)
-            sys.stdout.flush()
             lines.append(line)
+            if show:
+                try:
+                    sys.stdout.write(line)
+                    sys.stdout.flush()
+                except UnicodeEncodeError:
+                    enc = getattr(sys.stdout, "encoding", None) or "ascii"
+                    try:
+                        sys.stdout.write(line.encode(enc, "replace").decode(enc))
+                        sys.stdout.flush()
+                    except (OSError, ValueError):
+                        show = False
+                except (OSError, ValueError):  # closed/broken stdout: keep capturing silently
+                    show = False
     except KeyboardInterrupt:
+        sys.stderr.write("\nInterrupted: stopping the command...\n")
         proc.terminate()
     proc.wait()
     text = "".join(lines)

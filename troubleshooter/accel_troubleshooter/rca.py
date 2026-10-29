@@ -12,7 +12,8 @@ Confidence is assigned from explicit criteria (no numeric scores):
 
 from __future__ import annotations
 
-from typing import Callable, Dict, List, Tuple
+import re
+from typing import Any, Callable, Dict, List, Tuple
 
 from .actions import build_action
 from .diagnostics.base import DiagContext
@@ -143,9 +144,27 @@ def rg_not_found(ctx):
 # --------------------------------------------------------------------------- quota & model
 
 
+_QUOTA_NUMBERS = re.compile(
+    r"requires?\s+(\d+)\D{0,80}?(?:only\s+(\d+)|available capacity\s+(\d+))", re.IGNORECASE | re.DOTALL
+)
+
+
+def _arm_quota_failures(ctx) -> List[Dict[str, Any]]:
+    """Quota failures from live ARM deployment operations, with the requested/available numbers Azure reported."""
+    out = []
+    for e in ctx.facts.get("deployment_errors", []):
+        if (e.get("code") or "").lower() not in QUOTA_CODES:
+            continue
+        m = _QUOTA_NUMBERS.search(e.get("message") or "")
+        need, avail = (int(m.group(1)), int(m.group(2) or m.group(3))) if m else (None, None)
+        out.append({**e, "need": need, "avail": avail})
+    return out
+
+
 @rule(10)
 def quota_insufficient(ctx):
     reported, observed = _codes(ctx)
+    arm = _arm_quota_failures(ctx)
     target = ctx.facts.get("quota_target_region")
     all_short = ctx.facts.get("quota_shortfalls", [])
     if target:
@@ -161,6 +180,23 @@ def quota_insufficient(ctx):
     rationale, contra, missing = [], [], []
     if code_observed:
         rationale.append(f"failed ARM operation reported {sorted(observed & QUOTA_CODES)} (live deployment operations)")
+    arm_confirmed = False
+    chat_cap = next((r["capacity"] for r in ctx.facts.get("model_requirements", []) if r["role"] == "chat"), None)
+    for f in arm:
+        if f["need"] is None:
+            continue
+        arm_confirmed = arm_confirmed or f["need"] > f["avail"]
+        where = f"{f.get('resource_type')} {f.get('resource_name')}, {f.get('timestamp')}"
+        rationale.append(
+            f"deployment '{f.get('deployment')}' ({where}) was rejected: "
+            f"requested {f['need']}, available {f['avail']} (from the ARM error message)"
+        )
+        if isinstance(chat_cap, int) and f["need"] != chat_cap:
+            rationale.append(
+                f"that request ({f['need']}) differs from the configured capacity ({chat_cap}K): it came from "
+                "an override, another template or a manual deployment — the configured value is not what failed"
+            )
+        rationale.append(f"to fit, request at most {f['avail']} (the free quota when it failed)")
     if code_reported:
         rationale.append(
             f"user-reported error code {sorted(reported & QUOTA_CODES)} is documented under Quota & Capacity"
@@ -171,7 +207,7 @@ def quota_insufficient(ctx):
             f"({s['capacity_source']}), available {s['available']} (used {s['used']}/{s['limit']}, "
             f"scope {s['scope']})"
         )
-    if ctx.facts.get("quota_ok") is True:
+    if ctx.facts.get("quota_ok") is True and not arm_confirmed:
         contra.append(
             f"live quota in {ctx.facts.get('quota_target_region')} is currently sufficient for all models — "
             "quota may have been freed since the failure or a different region/subscription was used"
@@ -179,7 +215,7 @@ def quota_insufficient(ctx):
     target_rows = (ctx.facts.get("quota_table") or {}).get(target or "", {}).get("models", [])
     for m in ctx.issue.models:
         row = next((x for x in target_rows if x["model"] == m), None)
-        if row and row["ok"] and (code_reported or code_observed):
+        if row and row["ok"] and (code_reported or code_observed) and not arm_confirmed:
             contra.append(
                 f"{m} is named in the reported error, but live {row['sku']} quota in {target} is now "
                 f"{row['available']}K available (>= {row['capacity']} required) — usage changed since the failure "
@@ -189,7 +225,7 @@ def quota_insufficient(ctx):
         missing.append("live quota usage for the target region (az cognitiveservices usage list)")
     if not ctx.facts.get("quota_target_region"):
         missing.append("which AI region was used (AZURE_ENV_AI_SERVICE_LOCATION or --region)")
-    if shortfalls and (code_observed or code_reported):
+    if (shortfalls and (code_observed or code_reported)) or arm_confirmed:
         status, conf = CONFIRMED, "high"
     elif shortfalls:
         status, conf = LIKELY, "high"
@@ -892,9 +928,11 @@ def missing_evidence(ctx: DiagContext, hyps: List[Hypothesis]) -> List[str]:
         out.append("Live Azure state (offline mode) — re-run without --offline after 'az login'")
     if not ctx.resource_group:
         out.append("Resource group name (no azd env found; pass --resource-group)")
-    if not ctx.issue.error_codes and {"deployment", "quota"} & set(ctx.issue.stages):
+    observed_codes = ctx.facts.get("deployment_error_codes") or []
+    if not ctx.issue.error_codes and not observed_codes and {"deployment", "quota"} & set(ctx.issue.stages):
         out.append("Exact error code and message from the azd/ARM output (e.g. 'Code: InsufficientQuota')")
-    if not ctx.issue.timestamps and {"runtime", "deployment"} & set(ctx.issue.stages):
+    when = [e.get("timestamp") for e in ctx.facts.get("deployment_errors", []) if e.get("timestamp")]
+    if not ctx.issue.timestamps and not when and {"runtime", "deployment"} & set(ctx.issue.stages):
         out.append("Approximate time of failure (to correlate with deployment/activity logs)")
     if {"runtime", "startup"} & set(ctx.issue.stages) and not any(h.id == "app-unhealthy" for h in hyps):
         out.append("Application logs (az webapp log tail / Application Insights) for the failing request")
