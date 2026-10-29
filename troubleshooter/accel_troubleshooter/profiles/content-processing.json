@@ -1,0 +1,46 @@
+{
+  "id": "content-processing",
+  "name": "Content Processing Solution Accelerator",
+  "upstream_repo": "https://github.com/microsoft/content-processing-solution-accelerator",
+  "aliases": ["content processing", "content-processing", "cps", "document processing accelerator", "content understanding accelerator"],
+  "repo_candidates": ["../content-processing-solution-accelerator"],
+  "fingerprint": {
+    "azure_yaml_names": ["content-processing"],
+    "remote_patterns": ["content-processing-solution-accelerator"],
+    "marker_files": ["docs/TroubleShootingSteps.md", "src/ContentProcessor", "src/ContentProcessorAPI"]
+  },
+  "resource_name_patterns": ["^ca-.*-(app|api|web)", "^aisa-", "^cosmos-", "^st[a-z0-9]+$", "^appcs-"],
+  "services": ["Azure AI Foundry", "Azure OpenAI", "Azure AI Content Understanding", "Azure Container Apps", "Azure Cosmos DB", "Azure Storage", "Azure App Configuration", "Azure Container Registry"],
+  "required_providers": ["Microsoft.CognitiveServices", "Microsoft.App", "Microsoft.DocumentDB", "Microsoft.Storage", "Microsoft.AppConfiguration", "Microsoft.ContainerRegistry", "Microsoft.OperationalInsights"],
+  "docs": {
+    "troubleshooting": ["docs/TroubleShootingSteps.md"],
+    "deployment": ["docs/DeploymentGuide.md", "docs/AVMPostDeploymentGuide.md", "docs/ACRBuildAndPushGuide.md", "docs/CustomizingAzdParameters.md"],
+    "quota": ["docs/quota_check.md", "docs/AzureGPTQuotaSettings.md"],
+    "auth": ["docs/ConfigureAppAuthentication.md", "docs/ManualAppRegistrationConfiguration.md", "docs/AzureAccountSetup.md"],
+    "local_dev": ["docs/LocalDevelopmentSetup.md"],
+    "architecture": ["docs/TechnicalArchitecture.md", "docs/ProcessingPipelineApproach.md", "README.md"],
+    "reuse": ["docs/re-use-foundry-project.md", "docs/re-use-log-analytics.md", "docs/LogAnalyticsReplicationDisable.md", "docs/DeleteResourceGroup.md"]
+  },
+  "source_globs": ["infra/scripts/**/*.ps1", "infra/scripts/**/*.sh", "azure.yaml"],
+  "iac": {
+    "provider": "bicep",
+    "main": "infra/main.bicep",
+    "parameters": "infra/main.parameters.json",
+    "ai_location_param": "azureAiServiceLocation",
+    "location_param": "location",
+    "models": [
+      {"role": "chat", "name_param": "gptModelName", "version_param": "gptModelVersion", "capacity_param": "gptDeploymentCapacity", "sku_param": "deploymentType"}
+    ],
+    "quota_scripts": [],
+    "quota_doc": "docs/quota_check.md"
+  },
+  "azd_env_keys": {
+    "subscription": "AZURE_SUBSCRIPTION_ID",
+    "resource_group": "AZURE_RESOURCE_GROUP",
+    "location": "AZURE_LOCATION",
+    "ai_location": "AZURE_ENV_AI_SERVICE_LOCATION"
+  },
+  "apps": [],
+  "diagnostics": "generic",
+  "notes": "Profile supports document retrieval, accelerator identification, quota/model checks and generic ARM deployment checks. App-level (Container Apps) checks are not yet implemented for this accelerator."
+}

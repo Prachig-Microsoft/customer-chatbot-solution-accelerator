@@ -1,0 +1,31 @@
+{
+  "_comment": "Extensible issue taxonomy. Add stages/categories or patterns here; no code change required. Patterns are case-insensitive regular expressions. Weight defaults to 1.",
+  "stages": {
+    "pre-deployment": {"description": "Planning, quota/region selection, preflight checks before azd up", "patterns": ["before (i |we )?(run |do |start )?(the )?(deploy|azd up|azd provision|provision)", "preflight", "pre-?provision", "which region", "can i deploy", "enough (model )?quota to deploy", "plan(ning)? (a )?deploy"], "weight": 2},
+    "deployment": {"description": "azd up / azd provision / ARM-Bicep deployment", "patterns": ["deploy(ment)? (failed|fails|failing|error|stuck|hang|hung)", "azd (up|provision)", "provision(ing)? (failed|error|stuck)", "\\barm\\b", "bicep", "template", "partially (failed|deployed)", "stuck", "resource group", "infrastructure"], "weight": 1},
+    "post-deployment-script": {"description": "Post-provision scripts: image build/push, data upload, agent creation", "patterns": ["post-?(deploy|provision)(ment)? script", "postprovision", "build_push_images", "run_upload_data", "create_agents", "agent (creation|script)", "data (upload|script)", "index creation", "acr build"], "weight": 2},
+    "startup": {"description": "Application container/app start", "patterns": ["(won't|does not|doesn't|fails? to) start", "startup", "container (crash|exit|fail)", "application error", "hello ?world", "placeholder", "blank page", "default page"]},
+    "runtime": {"description": "Running application returning errors", "patterns": ["endpoint (is )?return(s|ing)? (errors?|5\\d\\d|4\\d\\d)", "\\b5\\d\\d\\b", "internal server error", "chat (is )?not (working|responding)", "no response", "returns? error", "stopped working", "timeouts?"]},
+    "authentication": {"description": "Entra ID, managed identity, RBAC, tokens", "patterns": ["\\b401\\b", "\\b403\\b", "unauthori[sz]ed", "forbidden", "authenticat", "managed identity", "\\brbac\\b", "role assignment", "permission", "access denied", "cannot access", "can't access", "login", "\\b(access|bearer|id|auth) token\\b", "token (expired|invalid)", "AuthorizationFailed", "PrincipalNotFound"]},
+    "quota": {"description": "Model/service quota or capacity", "patterns": ["quota", "InsufficientQuota", "capacity", "\\btpm\\b", "over ?quota", "exceeds? .*limit", "SkuNotAvailable", "no available instances"], "weight": 2},
+    "throttling": {"description": "Rate limiting at runtime", "patterns": ["\\b429\\b", "throttl", "rate.?limit", "too many requests", "retry-after"], "weight": 2},
+    "ingestion": {"description": "Data ingestion / indexing", "patterns": ["ingest", "index(ing|er)? (failed|error|empty)", "search index", "upload(ing)? (data|documents?)", "products? (not|missing)", "no results"]},
+    "document-processing": {"description": "Document/content processing pipeline", "patterns": ["process(ing)? (the )?document", "document processing", "content understanding", "extraction", "pipeline (failed|stuck)", "schema"]},
+    "configuration": {"description": "Configuration / environment variables / parameters", "patterns": ["config(uration)?", "env(ironment)? var", "\\.env\\b", "app settings?", "parameter", "changed? (a |the )?(config|setting|value|parameter)", "after (i |we )?chang"]},
+    "local-vs-cloud": {"description": "Works locally but fails in Azure", "patterns": ["works? (fine )?locally", "local(ly)? .* (but|fails)", "after (azure )?deploy(ment)? .*fail", "only in azure"], "weight": 2},
+    "networking": {"description": "Networking / private endpoints / public access", "patterns": ["network", "private endpoint", "vnet", "public (network )?access", "firewall", "dns", "connection refused", "unable to connect", "cors"]}
+  },
+  "categories": {
+    "quota-capacity": {"patterns": ["quota", "capacity", "tpm", "InsufficientQuota", "OverQuota", "SkuNotAvailable", "QuotaExceeded"]},
+    "region-model-availability": {"patterns": ["DeploymentModelNotSupported", "ServiceModelDeprecated", "not (available|supported) in (this |the )?region", "LocationNotAvailable", "ProvisioningDisabled", "model .*(not available|unsupported)"]},
+    "subscription-access": {"patterns": ["subscription", "MissingSubscriptionRegistration", "RequestDisallowedByPolicy", "SpecialFeatureOrQuotaIdRequired", "ReadOnlyDisabledSubscription", "policy"]},
+    "resource-group-deployment": {"patterns": ["ResourceGroupNotFound", "ResourceGroupBeingDeleted", "DeploymentActive", "DeploymentCanceled", "DeploymentNotFound", "resource group"]},
+    "resource-state": {"patterns": ["provisioning state", "AccountProvisioningStateInvalid", "failed provisioning", "ServiceDeleting", "soft-?deleted", "FlagMustBeSetForRestore"]},
+    "identity-rbac": {"patterns": ["managed identity", "rbac", "role", "401", "403", "unauthori[sz]ed", "forbidden", "PrincipalNotFound", "LinkedAuthorizationFailed", "AuthorizationFailed"]},
+    "post-provisioning": {"patterns": ["post-?(deploy|provision)", "agent", "build_push_images", "placeholder", "hello ?world", "data upload", "FOUNDRY_"]},
+    "app-runtime": {"patterns": ["5\\d\\d", "endpoint", "health", "stopped working", "error", "not responding"]},
+    "throttling": {"patterns": ["429", "throttl", "rate.?limit"]},
+    "configuration-drift": {"patterns": ["config", "setting", "parameter", "changed", "env"]},
+    "networking": {"patterns": ["network", "private", "public access", "dns", "vnet", "cors"]}
+  }
+}

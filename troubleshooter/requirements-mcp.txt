@@ -1,0 +1,2 @@
+# Optional: MCP server for GitHub Copilot agent mode (accel_troubleshooter.mcp_server)
+mcp>=1.10,<2

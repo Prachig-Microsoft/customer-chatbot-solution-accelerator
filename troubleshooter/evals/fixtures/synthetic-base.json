@@ -1,0 +1,76 @@
+{
+  "_meta": {
+    "note": "SYNTHETIC fixture: a healthy Customer Chatbot deployment (rg-demo). Shapes mirror real az CLI JSON output. Eval cases patch individual commands to inject one fault each. Not real Azure data.",
+    "env_file": "synthetic-env.txt"
+  },
+  "commands": {
+    "account show": {"exit_code": 0, "stdout": {"id": "00000000-0000-0000-0000-00000000aaaa", "name": "demo-subscription", "tenantId": "00000000-0000-0000-0000-00000000bbbb", "state": "Enabled", "user": {"name": "user@contoso.example", "type": "user"}}},
+    "ad signed-in-user show": {"exit_code": 0, "stdout": {"id": "11111111-1111-1111-1111-111111111111", "userPrincipalName": "user@contoso.example"}},
+    "provider show --namespace *": {"exit_code": 0, "stdout": {"namespace": "x", "registrationState": "Registered"}},
+    "group show --name rg-demo": {"exit_code": 0, "stdout": {"name": "rg-demo", "location": "australiaeast", "properties": {"provisioningState": "Succeeded"}, "tags": {"azd-env-name": "demo"}}},
+    "deployment group list --resource-group rg-demo": {"exit_code": 0, "stdout": [
+      {"name": "demo-1761600000", "properties": {"provisioningState": "Succeeded", "timestamp": "2026-10-28T10:00:00Z"}}
+    ]},
+    "resource list --resource-group rg-demo": {"exit_code": 0, "stdout": [
+      {"name": "aif-demo", "type": "Microsoft.CognitiveServices/accounts", "provisioningState": "Succeeded"},
+      {"name": "srch-demo", "type": "Microsoft.Search/searchServices", "provisioningState": "Succeeded"},
+      {"name": "cosmos-demo", "type": "Microsoft.DocumentDB/databaseAccounts", "provisioningState": "Succeeded"},
+      {"name": "crdemo", "type": "Microsoft.ContainerRegistry/registries", "provisioningState": "Succeeded"},
+      {"name": "asp-demo", "type": "Microsoft.Web/serverFarms", "provisioningState": "Succeeded"},
+      {"name": "api-chat-demo", "type": "Microsoft.Web/sites", "provisioningState": "Succeeded"},
+      {"name": "app-chat-demo", "type": "Microsoft.Web/sites", "provisioningState": "Succeeded"},
+      {"name": "api-scenario-demo", "type": "Microsoft.Web/sites", "provisioningState": "Succeeded"},
+      {"name": "app-scenario-demo", "type": "Microsoft.Web/sites", "provisioningState": "Succeeded"}
+    ]},
+    "monitor activity-log list --resource-group rg-demo --offset 72h --status Failed --max-events 50": {"exit_code": 0, "stdout": []},
+    "cognitiveservices usage list --location *": {"exit_code": 0, "stdout": [
+      {"name": {"value": "OpenAI.GlobalStandard.gpt-5.4-mini"}, "currentValue": 100.0, "limit": 1000.0, "scopeType": "Global"},
+      {"name": {"value": "OpenAI.GlobalStandard.text-embedding-3-small"}, "currentValue": 0.0, "limit": 3000.0, "scopeType": "Global"},
+      {"name": {"value": "OpenAI.GlobalStandard.gpt-realtime-mini"}, "currentValue": 0.0, "limit": 20.0, "scopeType": "Classic"}
+    ]},
+    "cognitiveservices model list --location *": {"exit_code": 0, "stdout": [
+      {"kind": "OpenAI", "model": {"name": "gpt-5.4-mini", "version": "2026-03-17", "lifecycleStatus": "GenerallyAvailable", "deprecation": {"inference": "2027-09-21T00:00:00Z"}, "skus": [{"name": "GlobalStandard"}, {"name": "DataZoneStandard"}]}},
+      {"kind": "OpenAI", "model": {"name": "text-embedding-3-small", "version": "1", "lifecycleStatus": "GenerallyAvailable", "deprecation": {"inference": "2027-04-30T00:00:00Z"}, "skus": [{"name": "GlobalStandard"}, {"name": "Standard"}]}},
+      {"kind": "OpenAI", "model": {"name": "gpt-realtime-mini", "version": "2025-12-15", "lifecycleStatus": "GenerallyAvailable", "deprecation": {"inference": "2027-06-30T00:00:00Z"}, "skus": [{"name": "GlobalStandard"}]}}
+    ]},
+    "cognitiveservices account deployment list --resource-group rg-demo --name aif-demo": {"exit_code": 0, "stdout": [
+      {"name": "gpt-5.4-mini", "sku": {"name": "GlobalStandard", "capacity": 50}, "properties": {"provisioningState": "Succeeded", "model": {"name": "gpt-5.4-mini", "version": "2026-03-17"}, "rateLimits": [{"key": "request", "count": 50.0, "renewalPeriod": 10.0}, {"key": "token", "count": 50000.0, "renewalPeriod": 60.0}]}},
+      {"name": "text-embedding-3-small", "sku": {"name": "GlobalStandard", "capacity": 10}, "properties": {"provisioningState": "Succeeded", "model": {"name": "text-embedding-3-small", "version": "1"}}},
+      {"name": "gpt-realtime-mini", "sku": {"name": "GlobalStandard", "capacity": 1}, "properties": {"provisioningState": "Succeeded", "model": {"name": "gpt-realtime-mini", "version": "2025-12-15"}}}
+    ]},
+    "cognitiveservices account show --resource-group rg-demo --name aif-demo": {"exit_code": 0, "stdout": {"name": "aif-demo", "properties": {"publicNetworkAccess": "Enabled", "networkAcls": {"defaultAction": "Allow"}, "disableLocalAuth": true}}},
+    "search service show --resource-group rg-demo --name srch-demo": {"exit_code": 0, "stdout": {"name": "srch-demo", "publicNetworkAccess": "enabled"}},
+    "cosmosdb show --resource-group rg-demo --name cosmos-demo": {"exit_code": 0, "stdout": {"name": "cosmos-demo", "publicNetworkAccess": "Enabled", "disableLocalAuth": true}},
+    "webapp list --resource-group rg-demo": {"exit_code": 0, "stdout": []},
+    "webapp show --resource-group rg-demo --name api-chat-demo": {"exit_code": 0, "stdout": {"name": "api-chat-demo", "state": "Running", "defaultHostName": "api-chat-demo.azurewebsites.net", "httpsOnly": true, "siteConfig": {"linuxFxVersion": "DOCKER|crdemo.azurecr.io/chat-backend:20261028"}, "identity": {"type": "SystemAssigned", "principalId": "22222222-2222-2222-2222-222222222222"}}},
+    "webapp show --resource-group rg-demo --name app-chat-demo": {"exit_code": 0, "stdout": {"name": "app-chat-demo", "state": "Running", "defaultHostName": "app-chat-demo.azurewebsites.net", "httpsOnly": true, "siteConfig": {"linuxFxVersion": "DOCKER|crdemo.azurecr.io/chat-frontend:20261028"}, "identity": {"type": "SystemAssigned", "principalId": "33333333-3333-3333-3333-333333333333"}}},
+    "webapp show --resource-group rg-demo --name api-scenario-demo": {"exit_code": 0, "stdout": {"name": "api-scenario-demo", "state": "Running", "defaultHostName": "api-scenario-demo.azurewebsites.net", "httpsOnly": true, "siteConfig": {"linuxFxVersion": "DOCKER|crdemo.azurecr.io/scenario-backend:20261028"}, "identity": {"type": "SystemAssigned", "principalId": "44444444-4444-4444-4444-444444444444"}}},
+    "webapp show --resource-group rg-demo --name app-scenario-demo": {"exit_code": 0, "stdout": {"name": "app-scenario-demo", "state": "Running", "defaultHostName": "app-scenario-demo.azurewebsites.net", "httpsOnly": true, "siteConfig": {"linuxFxVersion": "DOCKER|crdemo.azurecr.io/scenario-frontend:20261028"}, "identity": {"type": "SystemAssigned", "principalId": "55555555-5555-5555-5555-555555555555"}}},
+    "webapp config appsettings list --resource-group rg-demo --name api-chat-demo": {"exit_code": 0, "stdout": [
+      {"name": "AZURE_FOUNDRY_ENDPOINT", "value": "https://aif-demo.services.ai.azure.com/api/projects/proj-demo"},
+      {"name": "AZURE_OPENAI_ENDPOINT", "value": "https://aif-demo.openai.azure.com/"},
+      {"name": "AZURE_OPENAI_DEPLOYMENT_NAME", "value": "gpt-5.4-mini"},
+      {"name": "AZURE_SEARCH_ENDPOINT", "value": "https://srch-demo.search.windows.net"},
+      {"name": "COSMOS_DB_ENDPOINT", "value": "https://cosmos-demo.documents.azure.com:443/"},
+      {"name": "COSMOS_DB_DATABASE_NAME", "value": "ecommerce_db"},
+      {"name": "USE_FOUNDRY_AGENTS", "value": "True"},
+      {"name": "ALLOWED_ORIGINS_STR", "value": "https://app-chat-demo.azurewebsites.net,https://app-scenario-demo.azurewebsites.net"},
+      {"name": "FOUNDRY_CHAT_AGENT", "value": "ChatAgent-demo"},
+      {"name": "FOUNDRY_PRODUCT_AGENT", "value": "ProductAgent-demo"},
+      {"name": "FOUNDRY_POLICY_AGENT", "value": "PolicyAgent-demo"},
+      {"name": "APPLICATIONINSIGHTS_CONNECTION_STRING", "value": "InstrumentationKey=fake-key-should-never-be-printed"}
+    ]},
+    "role assignment list --assignee 22222222-2222-2222-2222-222222222222 --all": {"exit_code": 0, "stdout": [
+      {"principalId": "22222222-2222-2222-2222-222222222222", "roleDefinitionId": "/subscriptions/00000000-0000-0000-0000-00000000aaaa/providers/Microsoft.Authorization/roleDefinitions/a97b65f3-24c7-4388-baec-2e87135dc908", "scope": "/subscriptions/00000000-0000-0000-0000-00000000aaaa/resourceGroups/rg-demo/providers/Microsoft.CognitiveServices/accounts/aif-demo"},
+      {"principalId": "22222222-2222-2222-2222-222222222222", "roleDefinitionId": "/subscriptions/00000000-0000-0000-0000-00000000aaaa/providers/Microsoft.Authorization/roleDefinitions/8ebe5a00-799e-43f5-93ac-243d3dce84a7", "scope": "/subscriptions/00000000-0000-0000-0000-00000000aaaa/resourceGroups/rg-demo/providers/Microsoft.Search/searchServices/srch-demo"}
+    ]},
+    "cosmosdb sql role assignment list --resource-group rg-demo --account-name cosmos-demo": {"exit_code": 0, "stdout": [
+      {"principalId": "22222222-2222-2222-2222-222222222222", "roleDefinitionId": "/subscriptions/00000000-0000-0000-0000-00000000aaaa/resourceGroups/rg-demo/providers/Microsoft.DocumentDB/databaseAccounts/cosmos-demo/sqlRoleDefinitions/00000000-0000-0000-0000-000000000002"},
+      {"principalId": "11111111-1111-1111-1111-111111111111", "roleDefinitionId": "/subscriptions/00000000-0000-0000-0000-00000000aaaa/resourceGroups/rg-demo/providers/Microsoft.DocumentDB/databaseAccounts/cosmos-demo/sqlRoleDefinitions/00000000-0000-0000-0000-000000000002"}
+    ]},
+    "HTTP GET https://api-chat-demo.azurewebsites.net/health": {"exit_code": 200, "stdout": {"status": 200, "body_excerpt": "{\"status\":\"healthy\"}", "error": "", "latency_ms": 120}},
+    "HTTP GET https://api-scenario-demo.azurewebsites.net/health": {"exit_code": 200, "stdout": {"status": 200, "body_excerpt": "{\"status\":\"healthy\"}", "error": "", "latency_ms": 110}},
+    "HTTP GET https://app-chat-demo.azurewebsites.net/": {"exit_code": 200, "stdout": {"status": 200, "body_excerpt": "<!doctype html>", "error": "", "latency_ms": 90}},
+    "HTTP GET https://app-scenario-demo.azurewebsites.net/": {"exit_code": 200, "stdout": {"status": 200, "body_excerpt": "<!doctype html>", "error": "", "latency_ms": 95}}
+  }
+}

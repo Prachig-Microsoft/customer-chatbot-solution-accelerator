@@ -1,0 +1,7 @@
+.venv/
+.cache/
+.runs/
+__pycache__/
+*.pyc
+knowledge/*.json
+demo-output/

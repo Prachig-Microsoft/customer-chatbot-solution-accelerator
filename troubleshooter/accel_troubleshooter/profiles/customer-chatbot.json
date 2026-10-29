@@ -1,0 +1,75 @@
+{
+  "id": "customer-chatbot",
+  "name": "Customer Chatbot Solution Accelerator",
+  "upstream_repo": "https://github.com/microsoft/customer-chatbot-solution-accelerator",
+  "aliases": ["customer chatbot", "customer-chatbot", "ccsa", "chatbot accelerator", "customer chat bot"],
+  "repo_candidates": [".", "../customer-chatbot-solution-accelerator"],
+  "fingerprint": {
+    "azure_yaml_names": ["customer-chatbot-solution-accelerator"],
+    "remote_patterns": ["customer-chatbot-solution-accelerator"],
+    "marker_files": ["chat-app/backend/app/foundry_client.py", "scenarios/scenario_loader.py", "documents/TroubleShootingSteps.md"]
+  },
+  "resource_name_patterns": ["^app-chat-", "^api-chat-", "^app-scenario-", "^api-scenario-", "^aif-", "^srch-", "^proj-"],
+  "services": ["Azure AI Foundry", "Azure OpenAI", "Azure AI Search", "Azure Cosmos DB", "Azure App Service", "Azure Container Registry", "Application Insights", "Log Analytics"],
+  "required_providers": ["Microsoft.CognitiveServices", "Microsoft.Search", "Microsoft.DocumentDB", "Microsoft.Web", "Microsoft.ContainerRegistry", "Microsoft.OperationalInsights", "Microsoft.Insights", "Microsoft.ManagedIdentity"],
+  "expected_resource_types": ["Microsoft.CognitiveServices/accounts", "Microsoft.Search/searchServices", "Microsoft.DocumentDB/databaseAccounts", "Microsoft.Web/sites", "Microsoft.Web/serverFarms", "Microsoft.ContainerRegistry/registries"],
+  "docs": {
+    "troubleshooting": ["documents/TroubleShootingSteps.md"],
+    "deployment": ["documents/DeploymentGuide.md", "documents/AVMPostDeploymentGuide.md", "documents/scenario-deployment-guide.md", "documents/ACRBuildAndPushGuide.md", "documents/CustomizingAzdParameters.md"],
+    "quota": ["documents/QuotaCheck.md", "documents/AzureGPTQuotaSettings.md"],
+    "auth": ["documents/AppAuthentication.md", "documents/CreateNewAppRegistration.md", "documents/AzureAccountSetUp.md"],
+    "local_dev": ["documents/LocalDevelopmentSetup.md"],
+    "architecture": ["documents/TechnicalArchitecture.md", "README.md"],
+    "reuse": ["documents/ReuseFoundryProject.md", "documents/ReuseLogAnalytics.md", "documents/LogAnalyticsReplicationDisable.md", "documents/DeleteResourceGroup.md"]
+  },
+  "source_globs": ["infra/scripts/**/*.ps1", "infra/scripts/**/*.sh", "infra/scripts/**/*.py", "chat-app/backend/app/config.py", "chat-app/backend/app/main.py", "scenario-app/backend/app/config.py", "azure.yaml"],
+  "iac": {
+    "provider": "bicep",
+    "main": "infra/main.bicep",
+    "parameters": "infra/main.parameters.json",
+    "ai_location_param": "azureAiServiceLocation",
+    "location_param": "location",
+    "models": [
+      {"role": "chat", "name_param": "gptModelName", "version_param": "gptModelVersion", "capacity_param": "gptDeploymentCapacity", "sku_param": "deploymentType"},
+      {"role": "embedding", "name_param": "embeddingModel", "capacity_param": "embeddingDeploymentCapacity", "sku_fixed": "GlobalStandard"},
+      {"role": "realtime", "name_param": "gptRealtimeModelName", "version_param": "gptRealtimeModelVersion", "capacity_param": "gptRealtimeDeploymentCapacity", "sku_fixed": "GlobalStandard"}
+    ],
+    "quota_scripts": ["infra/scripts/pre-provision/checkquota.sh", "infra/scripts/pre-provision/quota_check_params.sh"],
+    "quota_doc": "documents/QuotaCheck.md"
+  },
+  "azd_env_keys": {
+    "subscription": "AZURE_SUBSCRIPTION_ID",
+    "resource_group": "AZURE_RESOURCE_GROUP",
+    "location": "AZURE_LOCATION",
+    "ai_location": "AZURE_ENV_AI_SERVICE_LOCATION",
+    "ai_account": "AI_SERVICE_NAME",
+    "ai_account_id": "AI_FOUNDRY_RESOURCE_ID",
+    "search_resource_id": "AI_SEARCH_SERVICE_RESOURCE_ID",
+    "cosmos_account": "AZURE_COSMOSDB_ACCOUNT",
+    "acr_name": "AZURE_CONTAINER_REGISTRY_NAME"
+  },
+  "apps": [
+    {
+      "id": "chat-api", "role": "backend", "name_env": "CHAT_API_APP_NAME", "url_env": "CHAT_API_APP_URL", "health_path": "/health",
+      "required_settings": ["AZURE_FOUNDRY_ENDPOINT", "AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_DEPLOYMENT_NAME", "AZURE_SEARCH_ENDPOINT", "COSMOS_DB_ENDPOINT", "COSMOS_DB_DATABASE_NAME", "USE_FOUNDRY_AGENTS", "ALLOWED_ORIGINS_STR"],
+      "required_settings_ref": "infra/bicep/main.bicep:460-516",
+      "post_provision_settings": ["FOUNDRY_CHAT_AGENT", "FOUNDRY_PRODUCT_AGENT", "FOUNDRY_POLICY_AGENT"],
+      "post_provision_ref": "infra/scripts/post-provision/agent_scripts/run_create_agents_scripts.ps1:391-397",
+      "expected_roles": [
+        {"role": "Cognitive Services User", "role_id": "a97b65f3-24c7-4388-baec-2e87135dc908", "scope_env": "AI_FOUNDRY_RESOURCE_ID", "source": "infra/bicep/modules/identity/role-assignments.bicep:130"},
+        {"role": "Search Index Data Contributor", "role_id": "8ebe5a00-799e-43f5-93ac-243d3dce84a7", "scope_env": "AI_SEARCH_SERVICE_RESOURCE_ID", "source": "infra/bicep/modules/identity/role-assignments.bicep:180"}
+      ],
+      "cosmos_data_role": {"role_id_suffix": "00000000-0000-0000-0000-000000000002", "source": "infra/bicep/modules/identity/role-assignments.bicep:194"}
+    },
+    {"id": "chat-web", "role": "frontend", "name_env": "CHAT_WEB_APP_NAME", "url_env": "CHAT_WEB_APP_URL"},
+    {"id": "scenario-api", "role": "backend", "name_env": "SCENARIO_API_APP_NAME", "url_env": "SCENARIO_API_APP_URL", "health_path": "/health"},
+    {"id": "scenario-web", "role": "frontend", "name_env": "SCENARIO_WEB_APP_NAME", "url_env": "SCENARIO_WEB_APP_URL"}
+  ],
+  "placeholder_image_markers": ["containerapps-helloworld"],
+  "placeholder_image_ref": "infra/bicep/main.bicep:378",
+  "post_provision": {
+    "build_images": {"ps1": "infra/scripts/post-provision/build_push_images.ps1", "sh": "infra/scripts/post-provision/build_push_images.sh", "doc": "documents/DeploymentGuide.md (5.3 Build Container Images and Initialize Data and Agents)"},
+    "data_and_agents": {"ps1": "infra/scripts/post-provision/postprovision_data_agents.ps1", "sh": "infra/scripts/post-provision/postprovision_data_agents.sh", "doc": "documents/DeploymentGuide.md (Option A - Run both stages at once)"}
+  },
+  "diagnostics": "full"
+}

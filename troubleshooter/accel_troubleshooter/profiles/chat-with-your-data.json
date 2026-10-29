@@ -1,0 +1,48 @@
+{
+  "id": "chat-with-your-data",
+  "name": "Chat With Your Data Solution Accelerator",
+  "upstream_repo": "https://github.com/Azure-Samples/chat-with-your-data-solution-accelerator",
+  "aliases": ["chat with your data", "chat-with-your-data", "cwyd", "chat on your data"],
+  "repo_candidates": ["../CWYD/chat-with-your-data-solution-accelerator", "../chat-with-your-data-solution-accelerator"],
+  "fingerprint": {
+    "azure_yaml_names": ["chat-with-your-data-v2", "chat-with-your-data-solution-accelerator"],
+    "remote_patterns": ["chat-with-your-data-solution-accelerator"],
+    "marker_files": ["docs/TroubleShootingSteps.md", "docs/document_ingestion.md"]
+  },
+  "resource_name_patterns": [],
+  "services": ["Azure AI Foundry", "Azure OpenAI", "Azure AI Search", "Azure Database for PostgreSQL", "Azure Cosmos DB", "Azure Storage", "Azure Functions", "Azure App Service"],
+  "required_providers": ["Microsoft.CognitiveServices", "Microsoft.Search", "Microsoft.DBforPostgreSQL", "Microsoft.DocumentDB", "Microsoft.Storage", "Microsoft.Web", "Microsoft.OperationalInsights"],
+  "docs": {
+    "troubleshooting": ["docs/TroubleShootingSteps.md"],
+    "deployment": ["docs/DeploymentGuide.md", "docs/AVMPostDeploymentGuide.md", "docs/customizing_azd_parameters.md", "docs/LOCAL_DEPLOYMENT.md"],
+    "quota": ["docs/QuotaCheck.md", "docs/azure_openai_model_quota_settings.md"],
+    "auth": ["docs/authentication_setup.md", "docs/managed_identity.md", "docs/azure_account_setup.md"],
+    "local_dev": ["docs/LocalDevelopmentSetup.md"],
+    "architecture": ["docs/architecture.md", "docs/document_ingestion.md", "docs/model_configuration.md", "README.md"],
+    "reuse": ["docs/re-use-resource-group.md", "docs/delete_resource_group.md", "docs/LogAnalyticsReplicationDisable.md"]
+  },
+  "source_globs": ["infra/scripts/**/*.ps1", "infra/scripts/**/*.sh", "azure.yaml"],
+  "iac": {
+    "provider": "bicep",
+    "main": "infra/main.bicep",
+    "parameters": "infra/main.parameters.json",
+    "ai_location_param": "azureAiServiceLocation",
+    "location_param": "location",
+    "models": [
+      {"role": "chat", "name_param": "gptModelName", "version_param": "gptModelVersion", "capacity_param": "gptModelCapacity", "sku_param": "gptModelDeploymentType"},
+      {"role": "reasoning", "name_param": "reasoningModelName", "version_param": "reasoningModelVersion", "capacity_param": "reasoningModelCapacity", "sku_param": "reasoningModelDeploymentType"},
+      {"role": "embedding", "name_param": "embeddingModelName", "version_param": "embeddingModelVersion", "capacity_param": "embeddingModelCapacity", "sku_param": "embeddingModelDeploymentType"}
+    ],
+    "quota_scripts": [],
+    "quota_doc": "docs/QuotaCheck.md"
+  },
+  "azd_env_keys": {
+    "subscription": "AZURE_SUBSCRIPTION_ID",
+    "resource_group": "AZURE_RESOURCE_GROUP",
+    "location": "AZURE_LOCATION",
+    "ai_location": "AZURE_AI_SERVICE_LOCATION"
+  },
+  "apps": [],
+  "diagnostics": "generic",
+  "notes": "Profile supports document retrieval, accelerator identification, quota/model checks and generic ARM deployment checks. App-level checks (App Service/Functions, PostgreSQL) are not yet implemented for this accelerator."
+}

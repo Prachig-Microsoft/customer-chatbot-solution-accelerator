@@ -1,0 +1,1349 @@
+{
+ "_meta": {
+  "recorded_at": "2026-10-29T05:58:23Z",
+  "note": "Sanitized + anonymized live az outputs",
+  "trimmed": "catalog/usage lists trimmed to the models used by the customer-chatbot profile"
+ },
+ "commands": {
+  "account show": {
+   "exit_code": 0,
+   "stdout": {
+    "environmentName": "AzureCloud",
+    "homeTenantId": "00000000-0000-0000-0000-00000000bbbb",
+    "id": "00000000-0000-0000-0000-00000000aaaa",
+    "isDefault": true,
+    "managedByTenants": [],
+    "name": "demo-subscription",
+    "state": "Enabled",
+    "tenantDefaultDomain": "contoso.onmicrosoft.com",
+    "tenantDisplayName": "Contoso",
+    "tenantId": "00000000-0000-0000-0000-00000000bbbb",
+    "user": {
+     "name": "user@contoso.example",
+     "type": "user"
+    }
+   },
+   "stderr": ""
+  },
+  "provider show --namespace Microsoft.DocumentDB": {
+   "exit_code": 0,
+   "stdout": {
+    "namespace": "Microsoft.DocumentDB",
+    "registrationState": "Registered"
+   },
+   "stderr": ""
+  },
+  "provider show --namespace Microsoft.OperationalInsights": {
+   "exit_code": 0,
+   "stdout": {
+    "namespace": "Microsoft.OperationalInsights",
+    "registrationState": "Registered"
+   },
+   "stderr": ""
+  },
+  "provider show --namespace Microsoft.ContainerRegistry": {
+   "exit_code": 0,
+   "stdout": {
+    "namespace": "Microsoft.ContainerRegistry",
+    "registrationState": "Registered"
+   },
+   "stderr": ""
+  },
+  "provider show --namespace Microsoft.Search": {
+   "exit_code": 0,
+   "stdout": {
+    "namespace": "Microsoft.Search",
+    "registrationState": "Registered"
+   },
+   "stderr": ""
+  },
+  "provider show --namespace Microsoft.Web": {
+   "exit_code": 0,
+   "stdout": {
+    "namespace": "Microsoft.Web",
+    "registrationState": "Registered"
+   },
+   "stderr": ""
+  },
+  "provider show --namespace Microsoft.CognitiveServices": {
+   "exit_code": 0,
+   "stdout": {
+    "namespace": "Microsoft.CognitiveServices",
+    "registrationState": "Registered"
+   },
+   "stderr": ""
+  },
+  "provider show --namespace Microsoft.ManagedIdentity": {
+   "exit_code": 0,
+   "stdout": {
+    "namespace": "Microsoft.ManagedIdentity",
+    "registrationState": "Registered"
+   },
+   "stderr": ""
+  },
+  "provider show --namespace Microsoft.Insights": {
+   "exit_code": 0,
+   "stdout": {
+    "namespace": "microsoft.insights",
+    "registrationState": "Registered"
+   },
+   "stderr": ""
+  },
+  "cognitiveservices usage list --location swedencentral": {
+   "exit_code": 0,
+   "stdout": [
+    {
+     "currentValue": 260.0,
+     "limit": 3000.0,
+     "name": {
+      "localizedValue": "Tokens Per Minute (thousands) - text-embedding-3-small",
+      "value": "OpenAI.GlobalStandard.text-embedding-3-small"
+     },
+     "nextResetTime": null,
+     "quotaPeriod": null,
+     "scopeId": "global",
+     "scopeType": "Global",
+     "status": null,
+     "unit": "Count"
+    },
+    {
+     "currentValue": 0.0,
+     "limit": 1000.0,
+     "name": {
+      "localizedValue": "Tokens Per Minute (thousands) - text-embedding-3-small",
+      "value": "OpenAI.DataZoneStandard.text-embedding-3-small"
+     },
+     "nextResetTime": null,
+     "quotaPeriod": null,
+     "scopeId": "eur",
+     "scopeType": "DataZone",
+     "status": null,
+     "unit": "Count"
+    },
+    {
+     "currentValue": 1.0,
+     "limit": 20.0,
+     "name": {
+      "localizedValue": "Requests Per Minute - gpt-realtime-mini - GlobalStandard",
+      "value": "OpenAI.GlobalStandard.gpt-realtime-mini"
+     },
+     "nextResetTime": null,
+     "quotaPeriod": null,
+     "scopeId": "swedencentral",
+     "scopeType": "Classic",
+     "status": null,
+     "unit": "Count"
+    },
+    {
+     "currentValue": 231.0,
+     "limit": 1000.0,
+     "name": {
+      "localizedValue": "One Thousand Tokens Per Minute - gpt-5.4-mini - GlobalStandard",
+      "value": "OpenAI.GlobalStandard.gpt-5.4-mini"
+     },
+     "nextResetTime": null,
+     "quotaPeriod": null,
+     "scopeId": "global",
+     "scopeType": "Global",
+     "status": null,
+     "unit": "Count"
+    },
+    {
+     "currentValue": 0.0,
+     "limit": 200000.0,
+     "name": {
+      "localizedValue": "Enqueued tokens (thousands) - gpt-5.4-mini",
+      "value": "OpenAI.GlobalBatch.gpt-5.4-mini"
+     },
+     "nextResetTime": null,
+     "quotaPeriod": null,
+     "scopeId": "swedencentral",
+     "scopeType": "Classic",
+     "status": null,
+     "unit": "Count"
+    },
+    {
+     "currentValue": 0.0,
+     "limit": 1000.0,
+     "name": {
+      "localizedValue": "One Thousand Tokens Per Minute - gpt-5.4-mini - DataZoneStandard",
+      "value": "OpenAI.DataZoneStandard.gpt-5.4-mini"
+     },
+     "nextResetTime": null,
+     "quotaPeriod": null,
+     "scopeId": "eur",
+     "scopeType": "DataZone",
+     "status": null,
+     "unit": "Count"
+    }
+   ],
+   "stderr": ""
+  },
+  "cognitiveservices usage list --location francecentral": {
+   "exit_code": 0,
+   "stdout": [
+    {
+     "currentValue": 260.0,
+     "limit": 3000.0,
+     "name": {
+      "localizedValue": "Tokens Per Minute (thousands) - text-embedding-3-small",
+      "value": "OpenAI.GlobalStandard.text-embedding-3-small"
+     },
+     "nextResetTime": null,
+     "quotaPeriod": null,
+     "scopeId": "global",
+     "scopeType": "Global",
+     "status": null,
+     "unit": "Count"
+    },
+    {
+     "currentValue": 0.0,
+     "limit": 1000.0,
+     "name": {
+      "localizedValue": "Tokens Per Minute (thousands) - text-embedding-3-small",
+      "value": "OpenAI.DataZoneStandard.text-embedding-3-small"
+     },
+     "nextResetTime": null,
+     "quotaPeriod": null,
+     "scopeId": "eur",
+     "scopeType": "DataZone",
+     "status": null,
+     "unit": "Count"
+    },
+    {
+     "currentValue": 0.0,
+     "limit": 20.0,
+     "name": {
+      "localizedValue": "Requests Per Minute - gpt-realtime-mini - GlobalStandard",
+      "value": "OpenAI.GlobalStandard.gpt-realtime-mini"
+     },
+     "nextResetTime": null,
+     "quotaPeriod": null,
+     "scopeId": "francecentral",
+     "scopeType": "Classic",
+     "status": null,
+     "unit": "Count"
+    },
+    {
+     "currentValue": 231.0,
+     "limit": 1000.0,
+     "name": {
+      "localizedValue": "One Thousand Tokens Per Minute - gpt-5.4-mini - GlobalStandard",
+      "value": "OpenAI.GlobalStandard.gpt-5.4-mini"
+     },
+     "nextResetTime": null,
+     "quotaPeriod": null,
+     "scopeId": "global",
+     "scopeType": "Global",
+     "status": null,
+     "unit": "Count"
+    },
+    {
+     "currentValue": 0.0,
+     "limit": 200000.0,
+     "name": {
+      "localizedValue": "Enqueued tokens (thousands) - gpt-5.4-mini",
+      "value": "OpenAI.GlobalBatch.gpt-5.4-mini"
+     },
+     "nextResetTime": null,
+     "quotaPeriod": null,
+     "scopeId": "francecentral",
+     "scopeType": "Classic",
+     "status": null,
+     "unit": "Count"
+    },
+    {
+     "currentValue": 0.0,
+     "limit": 1000.0,
+     "name": {
+      "localizedValue": "One Thousand Tokens Per Minute - gpt-5.4-mini - DataZoneStandard",
+      "value": "OpenAI.DataZoneStandard.gpt-5.4-mini"
+     },
+     "nextResetTime": null,
+     "quotaPeriod": null,
+     "scopeId": "eur",
+     "scopeType": "DataZone",
+     "status": null,
+     "unit": "Count"
+    }
+   ],
+   "stderr": ""
+  },
+  "cognitiveservices usage list --location southindia": {
+   "exit_code": 0,
+   "stdout": [
+    {
+     "currentValue": 260.0,
+     "limit": 3000.0,
+     "name": {
+      "localizedValue": "Tokens Per Minute (thousands) - text-embedding-3-small",
+      "value": "OpenAI.GlobalStandard.text-embedding-3-small"
+     },
+     "nextResetTime": null,
+     "quotaPeriod": null,
+     "scopeId": "global",
+     "scopeType": "Global",
+     "status": null,
+     "unit": "Count"
+    },
+    {
+     "currentValue": 0.0,
+     "limit": 1000.0,
+     "name": {
+      "localizedValue": "Tokens Per Minute (thousands) - text-embedding-3-small",
+      "value": "OpenAI.DataZoneStandard.text-embedding-3-small"
+     },
+     "nextResetTime": null,
+     "quotaPeriod": null,
+     "scopeId": "apac",
+     "scopeType": "DataZone",
+     "status": null,
+     "unit": "Count"
+    },
+    {
+     "currentValue": 0.0,
+     "limit": 20.0,
+     "name": {
+      "localizedValue": "Requests Per Minute - gpt-realtime-mini - GlobalStandard",
+      "value": "OpenAI.GlobalStandard.gpt-realtime-mini"
+     },
+     "nextResetTime": null,
+     "quotaPeriod": null,
+     "scopeId": "southindia",
+     "scopeType": "Classic",
+     "status": null,
+     "unit": "Count"
+    },
+    {
+     "currentValue": 231.0,
+     "limit": 1000.0,
+     "name": {
+      "localizedValue": "One Thousand Tokens Per Minute - gpt-5.4-mini - GlobalStandard",
+      "value": "OpenAI.GlobalStandard.gpt-5.4-mini"
+     },
+     "nextResetTime": null,
+     "quotaPeriod": null,
+     "scopeId": "global",
+     "scopeType": "Global",
+     "status": null,
+     "unit": "Count"
+    },
+    {
+     "currentValue": 0.0,
+     "limit": 200000.0,
+     "name": {
+      "localizedValue": "Enqueued tokens (thousands) - gpt-5.4-mini",
+      "value": "OpenAI.GlobalBatch.gpt-5.4-mini"
+     },
+     "nextResetTime": null,
+     "quotaPeriod": null,
+     "scopeId": "southindia",
+     "scopeType": "Classic",
+     "status": null,
+     "unit": "Count"
+    },
+    {
+     "currentValue": 0.0,
+     "limit": 1000.0,
+     "name": {
+      "localizedValue": "One Thousand Tokens Per Minute - gpt-5.4-mini - DataZoneStandard",
+      "value": "OpenAI.DataZoneStandard.gpt-5.4-mini"
+     },
+     "nextResetTime": null,
+     "quotaPeriod": null,
+     "scopeId": "apac",
+     "scopeType": "DataZone",
+     "status": null,
+     "unit": "Count"
+    }
+   ],
+   "stderr": ""
+  },
+  "cognitiveservices usage list --location centralus": {
+   "exit_code": 0,
+   "stdout": [
+    {
+     "currentValue": 260.0,
+     "limit": 3000.0,
+     "name": {
+      "localizedValue": "Tokens Per Minute (thousands) - text-embedding-3-small",
+      "value": "OpenAI.GlobalStandard.text-embedding-3-small"
+     },
+     "nextResetTime": null,
+     "quotaPeriod": null,
+     "scopeId": "global",
+     "scopeType": "Global",
+     "status": null,
+     "unit": "Count"
+    },
+    {
+     "currentValue": 0.0,
+     "limit": 1000.0,
+     "name": {
+      "localizedValue": "Tokens Per Minute (thousands) - text-embedding-3-small",
+      "value": "OpenAI.DataZoneStandard.text-embedding-3-small"
+     },
+     "nextResetTime": null,
+     "quotaPeriod": null,
+     "scopeId": "us",
+     "scopeType": "DataZone",
+     "status": null,
+     "unit": "Count"
+    },
+    {
+     "currentValue": 0.0,
+     "limit": 20.0,
+     "name": {
+      "localizedValue": "Requests Per Minute - gpt-realtime-mini - GlobalStandard",
+      "value": "OpenAI.GlobalStandard.gpt-realtime-mini"
+     },
+     "nextResetTime": null,
+     "quotaPeriod": null,
+     "scopeId": "centralus",
+     "scopeType": "Classic",
+     "status": null,
+     "unit": "Count"
+    },
+    {
+     "currentValue": 231.0,
+     "limit": 1000.0,
+     "name": {
+      "localizedValue": "One Thousand Tokens Per Minute - gpt-5.4-mini - GlobalStandard",
+      "value": "OpenAI.GlobalStandard.gpt-5.4-mini"
+     },
+     "nextResetTime": null,
+     "quotaPeriod": null,
+     "scopeId": "global",
+     "scopeType": "Global",
+     "status": null,
+     "unit": "Count"
+    },
+    {
+     "currentValue": 0.0,
+     "limit": 200000.0,
+     "name": {
+      "localizedValue": "Enqueued tokens (thousands) - gpt-5.4-mini",
+      "value": "OpenAI.GlobalBatch.gpt-5.4-mini"
+     },
+     "nextResetTime": null,
+     "quotaPeriod": null,
+     "scopeId": "centralus",
+     "scopeType": "Classic",
+     "status": null,
+     "unit": "Count"
+    },
+    {
+     "currentValue": 0.0,
+     "limit": 200000.0,
+     "name": {
+      "localizedValue": "Enqueued tokens (thousands) - gpt-5.4-mini",
+      "value": "OpenAI.DataZoneBatch.gpt-5.4-mini"
+     },
+     "nextResetTime": null,
+     "quotaPeriod": null,
+     "scopeId": "centralus",
+     "scopeType": "Classic",
+     "status": null,
+     "unit": "Count"
+    },
+    {
+     "currentValue": 0.0,
+     "limit": 1000.0,
+     "name": {
+      "localizedValue": "One Thousand Tokens Per Minute - gpt-5.4-mini - DataZoneStandard",
+      "value": "OpenAI.DataZoneStandard.gpt-5.4-mini"
+     },
+     "nextResetTime": null,
+     "quotaPeriod": null,
+     "scopeId": "us",
+     "scopeType": "DataZone",
+     "status": null,
+     "unit": "Count"
+    }
+   ],
+   "stderr": ""
+  },
+  "cognitiveservices usage list --location eastus2": {
+   "exit_code": 0,
+   "stdout": [
+    {
+     "currentValue": 50.0,
+     "limit": 350.0,
+     "name": {
+      "localizedValue": "Tokens Per Minute (thousands) - text-embedding-3-small",
+      "value": "OpenAI.Standard.text-embedding-3-small"
+     },
+     "nextResetTime": null,
+     "quotaPeriod": null,
+     "scopeId": "eastus2",
+     "scopeType": "Regional",
+     "status": null,
+     "unit": "Count"
+    },
+    {
+     "currentValue": 260.0,
+     "limit": 3000.0,
+     "name": {
+      "localizedValue": "Tokens Per Minute (thousands) - text-embedding-3-small",
+      "value": "OpenAI.GlobalStandard.text-embedding-3-small"
+     },
+     "nextResetTime": null,
+     "quotaPeriod": null,
+     "scopeId": "global",
+     "scopeType": "Global",
+     "status": null,
+     "unit": "Count"
+    },
+    {
+     "currentValue": 0.0,
+     "limit": 1000.0,
+     "name": {
+      "localizedValue": "Tokens Per Minute (thousands) - text-embedding-3-small",
+      "value": "OpenAI.DataZoneStandard.text-embedding-3-small"
+     },
+     "nextResetTime": null,
+     "quotaPeriod": null,
+     "scopeId": "us",
+     "scopeType": "DataZone",
+     "status": null,
+     "unit": "Count"
+    },
+    {
+     "currentValue": 1.0,
+     "limit": 20.0,
+     "name": {
+      "localizedValue": "Requests Per Minute - gpt-realtime-mini - GlobalStandard",
+      "value": "OpenAI.GlobalStandard.gpt-realtime-mini"
+     },
+     "nextResetTime": null,
+     "quotaPeriod": null,
+     "scopeId": "eastus2",
+     "scopeType": "Classic",
+     "status": null,
+     "unit": "Count"
+    },
+    {
+     "currentValue": 231.0,
+     "limit": 1000.0,
+     "name": {
+      "localizedValue": "One Thousand Tokens Per Minute - gpt-5.4-mini - GlobalStandard",
+      "value": "OpenAI.GlobalStandard.gpt-5.4-mini"
+     },
+     "nextResetTime": null,
+     "quotaPeriod": null,
+     "scopeId": "global",
+     "scopeType": "Global",
+     "status": null,
+     "unit": "Count"
+    },
+    {
+     "currentValue": 0.0,
+     "limit": 200000.0,
+     "name": {
+      "localizedValue": "Enqueued tokens (thousands) - gpt-5.4-mini",
+      "value": "OpenAI.GlobalBatch.gpt-5.4-mini"
+     },
+     "nextResetTime": null,
+     "quotaPeriod": null,
+     "scopeId": "eastus2",
+     "scopeType": "Classic",
+     "status": null,
+     "unit": "Count"
+    },
+    {
+     "currentValue": 0.0,
+     "limit": 200000.0,
+     "name": {
+      "localizedValue": "Enqueued tokens (thousands) - gpt-5.4-mini",
+      "value": "OpenAI.DataZoneBatch.gpt-5.4-mini"
+     },
+     "nextResetTime": null,
+     "quotaPeriod": null,
+     "scopeId": "eastus2",
+     "scopeType": "Classic",
+     "status": null,
+     "unit": "Count"
+    },
+    {
+     "currentValue": 0.0,
+     "limit": 1000.0,
+     "name": {
+      "localizedValue": "One Thousand Tokens Per Minute - gpt-5.4-mini - DataZoneStandard",
+      "value": "OpenAI.DataZoneStandard.gpt-5.4-mini"
+     },
+     "nextResetTime": null,
+     "quotaPeriod": null,
+     "scopeId": "us",
+     "scopeType": "DataZone",
+     "status": null,
+     "unit": "Count"
+    }
+   ],
+   "stderr": ""
+  },
+  "cognitiveservices model list --location swedencentral": {
+   "exit_code": 0,
+   "stdout": [
+    {
+     "description": null,
+     "kind": "OpenAI",
+     "model": {
+      "baseModel": null,
+      "callRateLimit": null,
+      "capabilities": {
+       "area": "EUR",
+       "embeddings": "true",
+       "embeddingsMaxInputs": "2048"
+      },
+      "deprecation": {
+       "deprecationStatus": null,
+       "fineTune": null,
+       "inference": "2028-02-09T00:00:00Z"
+      },
+      "finetuneCapabilities": null,
+      "format": "OpenAI",
+      "isDefaultVersion": true,
+      "lifecycleStatus": "GenerallyAvailable",
+      "maxCapacity": 3,
+      "modelCatalogAssetId": "azureml://registries/azure-openai/models/text-embedding-3-small/versions/1",
+      "name": "text-embedding-3-small",
+      "publisher": null,
+      "replacementConfig": null,
+      "skus": [
+       {
+        "capacity": {
+         "allowedValues": null,
+         "default": 120,
+         "maximum": 1000000,
+         "minimum": null,
+         "step": null
+        },
+        "cost": null,
+        "deprecationDate": "2028-02-09T00:00:00+00:00",
+        "name": "GlobalStandard",
+        "rateLimits": [
+         {
+          "count": 1.0,
+          "renewalPeriod": 10.0,
+          "rules": null
+         },
+         {
+          "count": 1000.0,
+          "renewalPeriod": 60.0,
+          "rules": null
+         }
+        ],
+        "usageName": "OpenAI.GlobalStandard.text-embedding-3-small"
+       },
+       {
+        "capacity": {
+         "allowedValues": null,
+         "default": 120,
+         "maximum": 1000000,
+         "minimum": null,
+         "step": null
+        },
+        "cost": null,
+        "deprecationDate": "2028-02-09T00:00:00+00:00",
+        "name": "DataZoneStandard",
+        "rateLimits": [
+         {
+          "count": 1.0,
+          "renewalPeriod": 60.0,
+          "rules": null
+         },
+         {
+          "count": 1000.0,
+          "renewalPeriod": 60.0,
+          "rules": null
+         }
+        ],
+        "usageName": "OpenAI.DataZoneStandard.text-embedding-3-small"
+       }
+      ],
+      "source": null,
+      "sourceAccount": null,
+      "systemData": {
+       "createdAt": "2024-01-25T00:00:00+00:00",
+       "createdBy": "Microsoft",
+       "createdByType": "Application",
+       "lastModifiedAt": "2024-01-25T00:00:00+00:00",
+       "lastModifiedBy": "Microsoft",
+       "lastModifiedByType": "Application"
+      },
+      "version": "1"
+     },
+     "skuName": "S0"
+    },
+    {
+     "description": null,
+     "kind": "OpenAI",
+     "model": {
+      "baseModel": null,
+      "callRateLimit": null,
+      "capabilities": {
+       "area": "EUR",
+       "assistants": "false",
+       "chatCompletion": "false",
+       "completion": "false",
+       "realtime": "true"
+      },
+      "deprecation": {
+       "deprecationStatus": null,
+       "fineTune": null,
+       "inference": "2027-04-06T00:00:00Z"
+      },
+      "finetuneCapabilities": null,
+      "format": "OpenAI",
+      "isDefaultVersion": false,
+      "lifecycleStatus": "GenerallyAvailable",
+      "maxCapacity": 3,
+      "modelCatalogAssetId": "azureml://registries/azure-openai/models/gpt-realtime-mini/versions/2025-10-06",
+      "name": "gpt-realtime-mini",
+      "publisher": null,
+      "replacementConfig": null,
+      "skus": [
+       {
+        "capacity": {
+         "allowedValues": null,
+         "default": 100,
+         "maximum": 30000,
+         "minimum": null,
+         "step": null
+        },
+        "cost": null,
+        "deprecationDate": "2027-04-06T00:00:00+00:00",
+        "name": "GlobalStandard",
+        "rateLimits": [
+         {
+          "count": 10.0,
+          "renewalPeriod": 60.0,
+          "rules": null
+         },
+         {
+          "count": 5000.0,
+          "renewalPeriod": 60.0,
+          "rules": null
+         }
+        ],
+        "usageName": "OpenAI.GlobalStandard.gpt-realtime-mini"
+       }
+      ],
+      "source": null,
+      "sourceAccount": null,
+      "systemData": {
+       "createdAt": "2025-10-06T00:00:00+00:00",
+       "createdBy": "Microsoft",
+       "createdByType": "Application",
+       "lastModifiedAt": "2025-10-06T00:00:00+00:00",
+       "lastModifiedBy": "Microsoft",
+       "lastModifiedByType": "Application"
+      },
+      "version": "2025-10-06"
+     },
+     "skuName": "S0"
+    },
+    {
+     "description": null,
+     "kind": "OpenAI",
+     "model": {
+      "baseModel": null,
+      "callRateLimit": null,
+      "capabilities": {
+       "area": "EUR",
+       "assistants": "false",
+       "chatCompletion": "false",
+       "completion": "false",
+       "realtime": "true"
+      },
+      "deprecation": {
+       "deprecationStatus": null,
+       "fineTune": null,
+       "inference": "2026-12-15T00:00:00Z"
+      },
+      "finetuneCapabilities": null,
+      "format": "OpenAI",
+      "isDefaultVersion": true,
+      "lifecycleStatus": "GenerallyAvailable",
+      "maxCapacity": 3,
+      "modelCatalogAssetId": "azureml://registries/azure-openai/models/gpt-realtime-mini/versions/2025-12-15",
+      "name": "gpt-realtime-mini",
+      "publisher": null,
+      "replacementConfig": null,
+      "skus": [
+       {
+        "capacity": {
+         "allowedValues": null,
+         "default": 100,
+         "maximum": 30000,
+         "minimum": null,
+         "step": null
+        },
+        "cost": null,
+        "deprecationDate": "2026-12-15T00:00:00+00:00",
+        "name": "GlobalStandard",
+        "rateLimits": [
+         {
+          "count": 3.0,
+          "renewalPeriod": 60.0,
+          "rules": null
+         },
+         {
+          "count": 10000.0,
+          "renewalPeriod": 60.0,
+          "rules": null
+         }
+        ],
+        "usageName": "OpenAI.GlobalStandard.gpt-realtime-mini"
+       }
+      ],
+      "source": null,
+      "sourceAccount": null,
+      "systemData": {
+       "createdAt": "2025-12-11T00:00:00+00:00",
+       "createdBy": "Microsoft",
+       "createdByType": "Application",
+       "lastModifiedAt": "2025-12-11T00:00:00+00:00",
+       "lastModifiedBy": "Microsoft",
+       "lastModifiedByType": "Application"
+      },
+      "version": "2025-12-15"
+     },
+     "skuName": "S0"
+    },
+    {
+     "description": null,
+     "kind": "OpenAI",
+     "model": {
+      "baseModel": null,
+      "callRateLimit": null,
+      "capabilities": {
+       "FineTuneTokensMaxValue": "<redacted>",
+       "FineTuneTokensMaxValuePerExample": "<redacted>",
+       "agentsV2": "true",
+       "area": "EUR",
+       "assistants": "true",
+       "chatCompletion": "true",
+       "priorityTierSkus": "GlobalStandard",
+       "responses": "true"
+      },
+      "deprecation": {
+       "deprecationStatus": null,
+       "fineTune": "2027-09-21T00:00:00Z",
+       "inference": "2027-09-21T00:00:00Z"
+      },
+      "finetuneCapabilities": null,
+      "format": "OpenAI",
+      "isDefaultVersion": true,
+      "lifecycleStatus": "GenerallyAvailable",
+      "maxCapacity": 3,
+      "modelCatalogAssetId": "azureml://registries/azure-openai/models/gpt-5.4-mini/versions/2026-03-17",
+      "name": "gpt-5.4-mini",
+      "publisher": null,
+      "replacementConfig": null,
+      "skus": [
+       {
+        "capacity": {
+         "allowedValues": null,
+         "default": 10,
+         "maximum": 10000000,
+         "minimum": null,
+         "step": null
+        },
+        "cost": null,
+        "deprecationDate": "2027-09-21T00:00:00+00:00",
+        "name": "GlobalStandard",
+        "rateLimits": [
+         {
+          "count": 1.0,
+          "renewalPeriod": 60.0,
+          "rules": null
+         },
+         {
+          "count": 1000.0,
+          "renewalPeriod": 60.0,
+          "rules": null
+         }
+        ],
+        "usageName": "OpenAI.GlobalStandard.gpt-5.4-mini"
+       },
+       {
+        "capacity": {
+         "allowedValues": null,
+         "default": 10,
+         "maximum": 10000000,
+         "minimum": null,
+         "step": null
+        },
+        "cost": null,
+        "deprecationDate": "2027-09-21T00:00:00+00:00",
+        "name": "DataZoneStandard",
+        "rateLimits": [
+         {
+          "count": 1.0,
+          "renewalPeriod": 60.0,
+          "rules": null
+         },
+         {
+          "count": 1000.0,
+          "renewalPeriod": 60.0,
+          "rules": null
+         }
+        ],
+        "usageName": "OpenAI.DataZoneStandard.gpt-5.4-mini"
+       },
+       {
+        "capacity": {
+         "allowedValues": null,
+         "default": null,
+         "maximum": 30000,
+         "minimum": 25,
+         "step": 25
+        },
+        "cost": null,
+        "deprecationDate": "2027-09-21T00:00:00+00:00",
+        "name": "ProvisionedManaged",
+        "rateLimits": null,
+        "usageName": "OpenAI.ProvisionedManaged"
+       },
+       {
+        "capacity": {
+         "allowedValues": null,
+         "default": null,
+         "maximum": 100000,
+         "minimum": 15,
+         "step": 5
+        },
+        "cost": null,
+        "deprecationDate": "2027-09-21T00:00:00+00:00",
+        "name": "DataZoneProvisionedManaged",
+        "rateLimits": null,
+        "usageName": "OpenAI.DataZoneProvisionedManaged"
+       },
+       {
+        "capacity": {
+         "allowedValues": null,
+         "default": null,
+         "maximum": 30000,
+         "minimum": 15,
+         "step": 5
+        },
+        "cost": null,
+        "deprecationDate": "2027-09-21T00:00:00+00:00",
+        "name": "GlobalProvisionedManaged",
+        "rateLimits": null,
+        "usageName": "OpenAI.GlobalProvisionedManaged"
+       },
+       {
+        "capacity": {
+         "allowedValues": null,
+         "default": 10,
+         "maximum": 100000000,
+         "minimum": null,
+         "step": null
+        },
+        "cost": null,
+        "deprecationDate": "2027-09-21T00:00:00+00:00",
+        "name": "GlobalBatch",
+        "rateLimits": null,
+        "usageName": "OpenAI.GlobalBatch.gpt-5.4-mini"
+       }
+      ],
+      "source": null,
+      "sourceAccount": null,
+      "systemData": {
+       "createdAt": "2026-03-17T00:00:00+00:00",
+       "createdBy": "Microsoft",
+       "createdByType": "Application",
+       "lastModifiedAt": "2026-03-17T00:00:00+00:00",
+       "lastModifiedBy": "Microsoft",
+       "lastModifiedByType": "Application"
+      },
+      "version": "2026-03-17"
+     },
+     "skuName": "S0"
+    },
+    {
+     "description": null,
+     "kind": "AIServices",
+     "model": {
+      "baseModel": null,
+      "callRateLimit": null,
+      "capabilities": {
+       "area": "EUR",
+       "embeddings": "true",
+       "embeddingsMaxInputs": "2048"
+      },
+      "deprecation": {
+       "deprecationStatus": null,
+       "fineTune": null,
+       "inference": "2028-02-09T00:00:00Z"
+      },
+      "finetuneCapabilities": null,
+      "format": "OpenAI",
+      "isDefaultVersion": true,
+      "lifecycleStatus": "GenerallyAvailable",
+      "maxCapacity": 3,
+      "modelCatalogAssetId": "azureml://registries/azure-openai/models/text-embedding-3-small/versions/1",
+      "name": "text-embedding-3-small",
+      "publisher": null,
+      "replacementConfig": null,
+      "skus": [
+       {
+        "capacity": {
+         "allowedValues": null,
+         "default": 120,
+         "maximum": 1000000,
+         "minimum": null,
+         "step": null
+        },
+        "cost": null,
+        "deprecationDate": "2028-02-09T00:00:00+00:00",
+        "name": "GlobalStandard",
+        "rateLimits": [
+         {
+          "count": 1.0,
+          "renewalPeriod": 10.0,
+          "rules": null
+         },
+         {
+          "count": 1000.0,
+          "renewalPeriod": 60.0,
+          "rules": null
+         }
+        ],
+        "usageName": "OpenAI.GlobalStandard.text-embedding-3-small"
+       },
+       {
+        "capacity": {
+         "allowedValues": null,
+         "default": 120,
+         "maximum": 1000000,
+         "minimum": null,
+         "step": null
+        },
+        "cost": null,
+        "deprecationDate": "2028-02-09T00:00:00+00:00",
+        "name": "DataZoneStandard",
+        "rateLimits": [
+         {
+          "count": 1.0,
+          "renewalPeriod": 60.0,
+          "rules": null
+         },
+         {
+          "count": 1000.0,
+          "renewalPeriod": 60.0,
+          "rules": null
+         }
+        ],
+        "usageName": "OpenAI.DataZoneStandard.text-embedding-3-small"
+       }
+      ],
+      "source": null,
+      "sourceAccount": null,
+      "systemData": {
+       "createdAt": "2024-01-25T00:00:00+00:00",
+       "createdBy": "Microsoft",
+       "createdByType": "Application",
+       "lastModifiedAt": "2024-01-25T00:00:00+00:00",
+       "lastModifiedBy": "Microsoft",
+       "lastModifiedByType": "Application"
+      },
+      "version": "1"
+     },
+     "skuName": "S0"
+    },
+    {
+     "description": null,
+     "kind": "AIServices",
+     "model": {
+      "baseModel": null,
+      "callRateLimit": null,
+      "capabilities": {
+       "area": "EUR",
+       "assistants": "false",
+       "chatCompletion": "false",
+       "completion": "false",
+       "realtime": "true"
+      },
+      "deprecation": {
+       "deprecationStatus": null,
+       "fineTune": null,
+       "inference": "2027-04-06T00:00:00Z"
+      },
+      "finetuneCapabilities": null,
+      "format": "OpenAI",
+      "isDefaultVersion": false,
+      "lifecycleStatus": "GenerallyAvailable",
+      "maxCapacity": 3,
+      "modelCatalogAssetId": "azureml://registries/azure-openai/models/gpt-realtime-mini/versions/2025-10-06",
+      "name": "gpt-realtime-mini",
+      "publisher": null,
+      "replacementConfig": null,
+      "skus": [
+       {
+        "capacity": {
+         "allowedValues": null,
+         "default": 100,
+         "maximum": 30000,
+         "minimum": null,
+         "step": null
+        },
+        "cost": null,
+        "deprecationDate": "2027-04-06T00:00:00+00:00",
+        "name": "GlobalStandard",
+        "rateLimits": [
+         {
+          "count": 10.0,
+          "renewalPeriod": 60.0,
+          "rules": null
+         },
+         {
+          "count": 5000.0,
+          "renewalPeriod": 60.0,
+          "rules": null
+         }
+        ],
+        "usageName": "OpenAI.GlobalStandard.gpt-realtime-mini"
+       }
+      ],
+      "source": null,
+      "sourceAccount": null,
+      "systemData": {
+       "createdAt": "2025-10-06T00:00:00+00:00",
+       "createdBy": "Microsoft",
+       "createdByType": "Application",
+       "lastModifiedAt": "2025-10-06T00:00:00+00:00",
+       "lastModifiedBy": "Microsoft",
+       "lastModifiedByType": "Application"
+      },
+      "version": "2025-10-06"
+     },
+     "skuName": "S0"
+    },
+    {
+     "description": null,
+     "kind": "AIServices",
+     "model": {
+      "baseModel": null,
+      "callRateLimit": null,
+      "capabilities": {
+       "area": "EUR",
+       "assistants": "false",
+       "chatCompletion": "false",
+       "completion": "false",
+       "realtime": "true"
+      },
+      "deprecation": {
+       "deprecationStatus": null,
+       "fineTune": null,
+       "inference": "2026-12-15T00:00:00Z"
+      },
+      "finetuneCapabilities": null,
+      "format": "OpenAI",
+      "isDefaultVersion": true,
+      "lifecycleStatus": "GenerallyAvailable",
+      "maxCapacity": 3,
+      "modelCatalogAssetId": "azureml://registries/azure-openai/models/gpt-realtime-mini/versions/2025-12-15",
+      "name": "gpt-realtime-mini",
+      "publisher": null,
+      "replacementConfig": null,
+      "skus": [
+       {
+        "capacity": {
+         "allowedValues": null,
+         "default": 100,
+         "maximum": 30000,
+         "minimum": null,
+         "step": null
+        },
+        "cost": null,
+        "deprecationDate": "2026-12-15T00:00:00+00:00",
+        "name": "GlobalStandard",
+        "rateLimits": [
+         {
+          "count": 3.0,
+          "renewalPeriod": 60.0,
+          "rules": null
+         },
+         {
+          "count": 10000.0,
+          "renewalPeriod": 60.0,
+          "rules": null
+         }
+        ],
+        "usageName": "OpenAI.GlobalStandard.gpt-realtime-mini"
+       }
+      ],
+      "source": null,
+      "sourceAccount": null,
+      "systemData": {
+       "createdAt": "2025-12-11T00:00:00+00:00",
+       "createdBy": "Microsoft",
+       "createdByType": "Application",
+       "lastModifiedAt": "2025-12-11T00:00:00+00:00",
+       "lastModifiedBy": "Microsoft",
+       "lastModifiedByType": "Application"
+      },
+      "version": "2025-12-15"
+     },
+     "skuName": "S0"
+    },
+    {
+     "description": null,
+     "kind": "AIServices",
+     "model": {
+      "baseModel": null,
+      "callRateLimit": null,
+      "capabilities": {
+       "FineTuneTokensMaxValue": "<redacted>",
+       "FineTuneTokensMaxValuePerExample": "<redacted>",
+       "agentsV2": "true",
+       "area": "EUR",
+       "assistants": "true",
+       "chatCompletion": "true",
+       "priorityTierSkus": "GlobalStandard",
+       "responses": "true"
+      },
+      "deprecation": {
+       "deprecationStatus": null,
+       "fineTune": "2027-09-21T00:00:00Z",
+       "inference": "2027-09-21T00:00:00Z"
+      },
+      "finetuneCapabilities": null,
+      "format": "OpenAI",
+      "isDefaultVersion": true,
+      "lifecycleStatus": "GenerallyAvailable",
+      "maxCapacity": 3,
+      "modelCatalogAssetId": "azureml://registries/azure-openai/models/gpt-5.4-mini/versions/2026-03-17",
+      "name": "gpt-5.4-mini",
+      "publisher": null,
+      "replacementConfig": null,
+      "skus": [
+       {
+        "capacity": {
+         "allowedValues": null,
+         "default": 10,
+         "maximum": 10000000,
+         "minimum": null,
+         "step": null
+        },
+        "cost": null,
+        "deprecationDate": "2027-09-21T00:00:00+00:00",
+        "name": "GlobalStandard",
+        "rateLimits": [
+         {
+          "count": 1.0,
+          "renewalPeriod": 60.0,
+          "rules": null
+         },
+         {
+          "count": 1000.0,
+          "renewalPeriod": 60.0,
+          "rules": null
+         }
+        ],
+        "usageName": "OpenAI.GlobalStandard.gpt-5.4-mini"
+       },
+       {
+        "capacity": {
+         "allowedValues": null,
+         "default": 10,
+         "maximum": 10000000,
+         "minimum": null,
+         "step": null
+        },
+        "cost": null,
+        "deprecationDate": "2027-09-21T00:00:00+00:00",
+        "name": "DataZoneStandard",
+        "rateLimits": [
+         {
+          "count": 1.0,
+          "renewalPeriod": 60.0,
+          "rules": null
+         },
+         {
+          "count": 1000.0,
+          "renewalPeriod": 60.0,
+          "rules": null
+         }
+        ],
+        "usageName": "OpenAI.DataZoneStandard.gpt-5.4-mini"
+       },
+       {
+        "capacity": {
+         "allowedValues": null,
+         "default": null,
+         "maximum": 30000,
+         "minimum": 25,
+         "step": 25
+        },
+        "cost": null,
+        "deprecationDate": "2027-09-21T00:00:00+00:00",
+        "name": "ProvisionedManaged",
+        "rateLimits": null,
+        "usageName": "OpenAI.ProvisionedManaged"
+       },
+       {
+        "capacity": {
+         "allowedValues": null,
+         "default": null,
+         "maximum": 100000,
+         "minimum": 15,
+         "step": 5
+        },
+        "cost": null,
+        "deprecationDate": "2027-09-21T00:00:00+00:00",
+        "name": "DataZoneProvisionedManaged",
+        "rateLimits": null,
+        "usageName": "OpenAI.DataZoneProvisionedManaged"
+       },
+       {
+        "capacity": {
+         "allowedValues": null,
+         "default": null,
+         "maximum": 30000,
+         "minimum": 15,
+         "step": 5
+        },
+        "cost": null,
+        "deprecationDate": "2027-09-21T00:00:00+00:00",
+        "name": "GlobalProvisionedManaged",
+        "rateLimits": null,
+        "usageName": "OpenAI.GlobalProvisionedManaged"
+       },
+       {
+        "capacity": {
+         "allowedValues": null,
+         "default": 10,
+         "maximum": 100000000,
+         "minimum": null,
+         "step": null
+        },
+        "cost": null,
+        "deprecationDate": "2027-09-21T00:00:00+00:00",
+        "name": "GlobalBatch",
+        "rateLimits": null,
+        "usageName": "OpenAI.GlobalBatch.gpt-5.4-mini"
+       }
+      ],
+      "source": null,
+      "sourceAccount": null,
+      "systemData": {
+       "createdAt": "2026-03-17T00:00:00+00:00",
+       "createdBy": "Microsoft",
+       "createdByType": "Application",
+       "lastModifiedAt": "2026-03-17T00:00:00+00:00",
+       "lastModifiedBy": "Microsoft",
+       "lastModifiedByType": "Application"
+      },
+      "version": "2026-03-17"
+     },
+     "skuName": "S0"
+    }
+   ],
+   "stderr": ""
+  }
+ }
+}

@@ -1,0 +1,34 @@
+{
+ "_meta": {
+  "recorded_at": "2026-10-29T05:56:23Z",
+  "note": "Sanitized + anonymized live az outputs",
+  "trimmed": "catalog/usage lists trimmed to the models used by the customer-chatbot profile"
+ },
+ "commands": {
+  "account show": {
+   "exit_code": 0,
+   "stdout": {
+    "environmentName": "AzureCloud",
+    "homeTenantId": "00000000-0000-0000-0000-00000000bbbb",
+    "id": "00000000-0000-0000-0000-00000000aaaa",
+    "isDefault": true,
+    "managedByTenants": [],
+    "name": "demo-subscription",
+    "state": "Enabled",
+    "tenantDefaultDomain": "contoso.onmicrosoft.com",
+    "tenantDisplayName": "Contoso",
+    "tenantId": "00000000-0000-0000-0000-00000000bbbb",
+    "user": {
+     "name": "user@contoso.example",
+     "type": "user"
+    }
+   },
+   "stderr": ""
+  },
+  "group show --name rg-pgbyocc4": {
+   "exit_code": 3,
+   "stdout": null,
+   "stderr": "ERROR: (ResourceGroupNotFound) Resource group 'rg-pgbyocc4' could not be found.\nCode: ResourceGroupNotFound\nMessage: Resource group 'rg-pgbyocc4' could not be found."
+  }
+ }
+}

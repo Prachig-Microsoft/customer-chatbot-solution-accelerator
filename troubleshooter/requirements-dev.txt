@@ -1,0 +1,4 @@
+# The core troubleshooter uses only the Python standard library (3.10+).
+# Test / lint tooling:
+pytest>=8
+flake8>=7

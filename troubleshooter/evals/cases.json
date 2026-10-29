@@ -1,0 +1,165 @@
+{
+  "_comment": "Evaluation cases. fixture: name of evals/fixtures/<name>.json (replayed az outputs) or 'offline'. patch/appsettings/remove_settings/set inject a single fault into the SYNTHETIC healthy baseline. 'live-*' fixtures are anonymized recordings of real read-only az calls. expect.top: acceptable top hypothesis ids (null = no confirmed/likely hypothesis should be produced).",
+  "cases": [
+    {
+      "id": "healthy-endpoint-errors-no-guess",
+      "issue": "My deployment succeeded, but the endpoint is returning errors",
+      "fixture": "synthetic-base", "env_file": "synthetic-env.txt",
+      "expect": {"accelerator": "customer-chatbot", "stage": "runtime", "top": [null]}
+    },
+    {
+      "id": "placeholder-images",
+      "issue": "I ran azd up successfully but the chat app only shows a default hello world page",
+      "fixture": "synthetic-base", "env_file": "synthetic-env.txt",
+      "set": {
+        "webapp show --resource-group rg-demo --name api-chat-demo::siteConfig.linuxFxVersion": "DOCKER|mcr.microsoft.com/azuredocs/containerapps-helloworld:latest",
+        "webapp show --resource-group rg-demo --name app-chat-demo::siteConfig.linuxFxVersion": "DOCKER|mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
+      },
+      "patch": {"HTTP GET https://api-chat-demo.azurewebsites.net/health": {"exit_code": 404, "stdout": {"status": 404, "body_excerpt": "Not Found", "error": ""}}},
+      "expect": {"accelerator": "customer-chatbot", "stage": "startup", "top": "images-not-built", "top_status": "confirmed", "action": "build-push-images"}
+    },
+    {
+      "id": "agents-not-created",
+      "issue": "The chatbot UI loads but every chat message returns a 500 error after deployment",
+      "fixture": "synthetic-base", "env_file": "synthetic-env.txt",
+      "appsettings": {"FOUNDRY_CHAT_AGENT": "", "FOUNDRY_PRODUCT_AGENT": "", "FOUNDRY_POLICY_AGENT": ""},
+      "expect": {"accelerator": "customer-chatbot", "stage": "runtime", "top": "agents-not-created", "action": "run-post-provision"}
+    },
+    {
+      "id": "rbac-missing-403",
+      "issue": "Backend logs show 403 Forbidden when the chat API calls Azure OpenAI",
+      "fixture": "synthetic-base", "env_file": "synthetic-env.txt",
+      "patch": {"role assignment list --assignee 22222222-2222-2222-2222-222222222222 --all": {"exit_code": 0, "stdout": []}},
+      "expect": {"stage": "authentication", "top": "rbac-missing", "action": "assign-app-role", "doc": "role-assignments.bicep"}
+    },
+    {
+      "id": "deployment-failed-insufficient-quota-observed",
+      "issue": "azd up failed during provisioning and the deployment shows Failed",
+      "fixture": "synthetic-base", "env_file": "synthetic-env.txt",
+      "patch": {
+        "deployment group list --resource-group rg-demo": {"exit_code": 0, "stdout": [{"name": "demo-1761700000", "properties": {"provisioningState": "Failed", "timestamp": "2026-10-28T11:00:00Z"}}]},
+        "deployment operation group list --resource-group rg-demo --name demo-1761700000": {"exit_code": 0, "stdout": [
+          {"properties": {"provisioningState": "Failed", "timestamp": "2026-10-28T11:02:00Z", "targetResource": {"resourceType": "Microsoft.CognitiveServices/accounts/deployments", "resourceName": "aif-demo/gpt-5.4-mini"},
+            "statusMessage": {"status": "Failed", "error": {"code": "InsufficientQuota", "message": "This operation require 50 new capacity in quota Tokens Per Minute (thousands) - gpt-5.4-mini GlobalStandard, which is bigger than the current available capacity 10."}}}}
+        ]},
+        "cognitiveservices usage list --location *": {"exit_code": 0, "stdout": [
+          {"name": {"value": "OpenAI.GlobalStandard.gpt-5.4-mini"}, "currentValue": 990.0, "limit": 1000.0, "scopeType": "Global"},
+          {"name": {"value": "OpenAI.GlobalStandard.text-embedding-3-small"}, "currentValue": 0.0, "limit": 3000.0, "scopeType": "Global"},
+          {"name": {"value": "OpenAI.GlobalStandard.gpt-realtime-mini"}, "currentValue": 0.0, "limit": 20.0, "scopeType": "Classic"}
+        ]}
+      },
+      "expect": {"stage": "deployment", "top": "quota-insufficient", "top_status": "confirmed", "doc": "TroubleShootingSteps.md:62", "action": "request-quota-increase"}
+    },
+    {
+      "id": "throttling-429",
+      "issue": "The model is deployed, but requests are being throttled with HTTP 429 Too Many Requests",
+      "fixture": "synthetic-base", "env_file": "synthetic-env.txt",
+      "expect": {"stage": "throttling", "top": "model-throttling", "action": "set-model-capacity"}
+    },
+    {
+      "id": "works-locally-public-access-disabled",
+      "issue": "The application works locally, but fails after Azure deployment",
+      "fixture": "synthetic-base", "env_file": "synthetic-env.txt",
+      "set": {"cognitiveservices account show --resource-group rg-demo --name aif-demo::properties.publicNetworkAccess": "Disabled"},
+      "expect": {"stage": "local-vs-cloud", "top": "public-access-disabled", "doc": "DeploymentGuide.md"}
+    },
+    {
+      "id": "partial-failure-provider-unregistered",
+      "issue": "Infrastructure deployment partially failed",
+      "fixture": "synthetic-base", "env_file": "synthetic-env.txt",
+      "patch": {
+        "provider show --namespace Microsoft.Search": {"exit_code": 0, "stdout": {"namespace": "Microsoft.Search", "registrationState": "NotRegistered"}},
+        "deployment group list --resource-group rg-demo": {"exit_code": 0, "stdout": [{"name": "demo-1761700001", "properties": {"provisioningState": "Failed", "timestamp": "2026-10-28T12:00:00Z"}}]},
+        "deployment operation group list --resource-group rg-demo --name demo-1761700001": {"exit_code": 0, "stdout": [
+          {"properties": {"provisioningState": "Failed", "targetResource": {"resourceType": "Microsoft.Search/searchServices", "resourceName": "srch-demo"},
+            "statusMessage": {"error": {"code": "MissingSubscriptionRegistration", "message": "The subscription is not registered to use namespace 'Microsoft.Search'."}}}}
+        ]},
+        "resource list --resource-group rg-demo": {"exit_code": 0, "stdout": [
+          {"name": "aif-demo", "type": "Microsoft.CognitiveServices/accounts", "provisioningState": "Succeeded"},
+          {"name": "cosmos-demo", "type": "Microsoft.DocumentDB/databaseAccounts", "provisioningState": "Succeeded"}
+        ]}
+      },
+      "expect": {"stage": "deployment", "top": ["documented-missingsubscriptionregistration", "provider-unregistered", "partial-deployment"], "action": "register-provider"}
+    },
+    {
+      "id": "deployment-stuck",
+      "issue": "Infrastructure deployment is stuck and has been running for hours",
+      "fixture": "synthetic-base", "env_file": "synthetic-env.txt",
+      "patch": {"deployment group list --resource-group rg-demo": {"exit_code": 0, "stdout": [{"name": "demo-1761700002", "properties": {"provisioningState": "Running", "timestamp": "2026-10-28T08:00:00Z"}}]}},
+      "expect": {"stage": "deployment", "top": "deployment-in-progress", "doc": "TroubleShootingSteps.md"}
+    },
+    {
+      "id": "post-provision-unauthorized-cosmos",
+      "issue": "Post-deployment script is throwing an error: Unauthorized. Ensure your identity has 'Cosmos DB Built-in Data Contributor' role.",
+      "fixture": "synthetic-base", "env_file": "synthetic-env.txt",
+      "patch": {"cosmosdb sql role assignment list --resource-group rg-demo --account-name cosmos-demo": {"exit_code": 0, "stdout": [
+        {"principalId": "22222222-2222-2222-2222-222222222222", "roleDefinitionId": "/x/sqlRoleDefinitions/00000000-0000-0000-0000-000000000002"}]}},
+      "expect": {"stage": "post-deployment-script", "top": "deployer-cosmos-role-missing", "top_status": "confirmed", "doc": "03_write_products_to_cosmos.py"}
+    },
+    {
+      "id": "config-change-broke-app",
+      "issue": "I changed a configuration value in the portal and the application stopped working",
+      "fixture": "synthetic-base", "env_file": "synthetic-env.txt",
+      "remove_settings": ["COSMOS_DB_ENDPOINT"],
+      "expect": {"stage": "configuration", "top": "app-settings-missing", "doc": "main.bicep"}
+    },
+    {
+      "id": "model-not-supported",
+      "issue": "Deployment failed with DeploymentModelNotSupported for gpt-5.4-mini",
+      "fixture": "synthetic-base", "env_file": "synthetic-env.txt",
+      "set": {"cognitiveservices model list --location *::0.model.version": "2025-01-01"},
+      "expect": {"stage": "deployment", "top": "model-region-unsupported", "top_status": "confirmed", "doc": "TroubleShootingSteps.md:158"}
+    },
+    {
+      "id": "live-rg-deleted-endpoint-errors",
+      "issue": "My deployment succeeded, but the endpoint is returning 500 errors",
+      "fixture": "live-rg-deleted",
+      "overrides": {"resource_group": "rg-pgbyocc4", "region": "eastus2"},
+      "expect": {"accelerator": "customer-chatbot", "top": "resource-group-missing", "top_status": "confirmed", "doc": "TroubleShootingSteps.md:73"}
+    },
+    {
+      "id": "live-quota-shortfall-whatif",
+      "issue": "azd up failed: InsufficientQuota - This operation require 800 new capacity in quota Tokens Per Minute (thousands) - gpt-5.4-mini",
+      "fixture": "live-quota-shortfall",
+      "overrides": {"region": "swedencentral", "capacity_overrides": {"gptDeploymentCapacity": 800, "gptRealtimeDeploymentCapacity": 20}},
+      "expect": {"stage": "quota", "top": "quota-insufficient", "top_status": "confirmed", "doc": "TroubleShootingSteps.md:62", "action": "set-model-capacity"}
+    },
+    {
+      "id": "live-quota-healthy-preflight",
+      "issue": "Before I run azd up, is there enough model quota to deploy?",
+      "fixture": "live-quota",
+      "overrides": {"all_regions": true},
+      "expect": {"stage": "pre-deployment", "top": [null]}
+    },
+    {
+      "id": "identify-cwyd",
+      "issue": "Chat with your data is deployed, but my application cannot access Azure OpenAI",
+      "fixture": "offline",
+      "expect": {"accelerator": "chat-with-your-data", "stage": "authentication"}
+    },
+    {
+      "id": "identify-content-processing",
+      "issue": "The content processing accelerator is failing while processing documents",
+      "fixture": "offline",
+      "expect": {"accelerator": "content-processing", "stage": "document-processing"}
+    },
+    {
+      "id": "clarify-unknown-workspace",
+      "issue": "my app is broken after deployment",
+      "fixture": "offline", "workspace": "fixtures",
+      "expect": {"clarification": true}
+    },
+    {
+      "id": "clarify-two-accelerators-mentioned",
+      "issue": "We run both customer chatbot and chat with your data; deployment failed",
+      "fixture": "offline", "workspace": "fixtures",
+      "expect": {"clarification": true}
+    },
+    {
+      "id": "explicit-accelerator-selection",
+      "issue": "my app is broken after deployment",
+      "fixture": "offline", "workspace": "fixtures", "accelerator_arg": "customer-chatbot",
+      "expect": {"clarification": false, "accelerator": "customer-chatbot"}
+    }
+  ]
+}
