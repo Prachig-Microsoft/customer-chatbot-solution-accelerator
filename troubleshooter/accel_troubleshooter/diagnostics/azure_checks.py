@@ -231,8 +231,20 @@ def deploy_operations(ctx: DiagContext) -> CheckResult:
                 e["deployment"] = d["name"]
                 errors.append(e)
     codes = sorted({e["code"] for e in errors if e.get("code") and e["code"] != "DeploymentFailed"})
+    # ARM leaves brief gaps between phases where nothing is "Running"; very recent activity still means "in progress".
+    recent_min = None
+    if summary and not failed:
+        try:
+            newest = datetime.fromisoformat(summary[0]["timestamp"].replace("Z", "+00:00"))
+            recent_min = (datetime.now(timezone.utc) - newest).total_seconds() / 60
+        except (AttributeError, ValueError, KeyError):
+            pass
     ctx.facts.update(
-        deployment_error_codes=codes, deployment_errors=errors, running_deployments=running, deployments=summary
+        deployment_error_codes=codes,
+        deployment_errors=errors,
+        running_deployments=running,
+        deployments=summary,
+        deployment_recent_minutes=recent_min,
     )
     ev = {"recent_deployments": summary, "failed_operations": errors[:15]}
     if running:

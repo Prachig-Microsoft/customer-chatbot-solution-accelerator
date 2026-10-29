@@ -405,17 +405,28 @@ def documented_deployment_errors(ctx):
 def deployment_running(ctx):
     stuck = ctx.facts.get("stuck_deployments") or []
     running = ctx.facts.get("running_deployments") or []
-    if not running:
+    recent = ctx.facts.get("deployment_recent_minutes")
+    just_active = recent is not None and recent < 10
+    if not running and not just_active:
         return []
+    n = len(ctx.facts.get("resources") or [])
+    evidence = (
+        f"{len(running)} ARM deployment(s) still running: {[r['name'] for r in running]}"
+        if running
+        else f"latest ARM deployment activity was {recent:.0f} min ago (between phases, nothing 'Running' right now)"
+    )
     return [
         (
             Hypothesis(
                 "deployment-in-progress",
-                "A deployment is still running" + (" (>1h — likely stuck)" if stuck else ""),
+                "Deployment is still in progress"
+                + (" (running > 1h — likely stuck)" if stuck else " — not a failure yet"),
                 LIKELY,
                 "high" if stuck else "medium",
-                [f"running deployments: {[r['name'] for r in running]}"],
+                [evidence, f"{n} resources created so far; the rest (e.g. web apps) are created later in the same run"],
                 supporting_checks=["deploy.operations"],
+                contradicting=[] if stuck else ["no failed operations recorded; wait for azd up to finish"],
+                missing_evidence=["azd up final output (if it later fails, use: diagnose --from-clipboard)"],
                 doc_refs=[_ts_ref(ctx, "DeploymentActive")],
                 component="ARM deployment",
             ),
@@ -426,6 +437,9 @@ def deployment_running(ctx):
 
 @rule(22)
 def partial_deployment(ctx):
+    recent = ctx.facts.get("deployment_recent_minutes")
+    if ctx.facts.get("running_deployments") or (recent is not None and recent < 10):
+        return []  # still active: missing resources are expected, not a partial failure
     missing = ctx.facts.get("missing_resource_types") or []
     bad = ctx.facts.get("unhealthy_resources") or []
     if not missing and not bad:

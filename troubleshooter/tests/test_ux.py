@@ -128,6 +128,61 @@ def test_empty_prompt_answer_skips_the_resource_checks(synthetic_fixture, tmp_pa
     assert d.targets["resource_group"] is None
 
 
+def _now_iso(minutes_ago: float) -> str:
+    from datetime import datetime, timedelta, timezone
+
+    return (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _partial_fixture(synthetic_fixture, state, minutes_ago):
+    return _fixture(
+        synthetic_fixture,
+        **{
+            "resource list --resource-group rg-demo": {
+                "exit_code": 0,
+                "stdout": [
+                    {
+                        "name": "aif-demo",
+                        "type": "Microsoft.CognitiveServices/accounts",
+                        "provisioningState": "Succeeded",
+                    }
+                ],
+            },
+            "deployment group list --resource-group rg-demo": {
+                "exit_code": 0,
+                "stdout": [
+                    {"name": "module.x", "properties": {"provisioningState": state, "timestamp": _now_iso(minutes_ago)}}
+                ],
+            },
+        },
+    )
+
+
+def test_running_or_just_finished_deployment_is_in_progress_not_partial(synthetic_fixture, synthetic_env_file):
+    for state, minutes in (("Running", 1), ("Succeeded", 1)):  # second case = gap between ARM phases
+        ts = Troubleshooter(REPO_ROOT, ReplayRunner(_partial_fixture(synthetic_fixture, state, minutes)))
+        d = ts.diagnose(
+            "azd up status",
+            env_file=synthetic_env_file,
+            only_checks=["rg.state", "deploy.operations", "resources.state"],
+            log=False,
+        )
+        assert d.hypotheses[0].id == "deployment-in-progress", (state, [h.id for h in d.hypotheses])
+        assert not any(h.id == "partial-deployment" for h in d.hypotheses)
+        assert not any(a.id.startswith("azd-provision") for a in d.actions.values())
+
+
+def test_old_missing_resources_are_still_reported_as_partial(synthetic_fixture, synthetic_env_file):
+    ts = Troubleshooter(REPO_ROOT, ReplayRunner(_partial_fixture(synthetic_fixture, "Succeeded", 120)))
+    d = ts.diagnose(
+        "azd up status",
+        env_file=synthetic_env_file,
+        only_checks=["rg.state", "deploy.operations", "resources.state"],
+        log=False,
+    )
+    assert d.hypotheses[0].id == "partial-deployment"
+
+
 def test_empty_resource_group_is_not_called_a_failure(synthetic_fixture, synthetic_env_file):
     fx = _fixture(
         synthetic_fixture,
