@@ -529,6 +529,35 @@ def partial_deployment(ctx):
 # --------------------------------------------------------------------------- app / post-provision
 
 
+@rule(29)
+def app_stopped(ctx):
+    stopped = ctx.facts.get("stopped_apps") or []
+    if not stopped:
+        return []
+    rg = ctx.resource_group
+    acts = [build_action("start-webapp", ctx.profile, resource_group=rg, app=name) for name in stopped]
+    probes = ctx.facts.get("health_results") or []
+    symptom = [f"{p['app']}: HTTP {p.get('status')}" for p in probes if p["app"] in ("chat-api", "chat-web")]
+    return [
+        (
+            Hypothesis(
+                "app-stopped",
+                f"App Service is stopped: {', '.join(stopped)}",
+                CONFIRMED,
+                "high",
+                [f"'az webapp show' reports state != Running for {stopped} (live)"]
+                + ([f"health probes: {', '.join(symptom)}"] if symptom else []),
+                supporting_checks=["webapp.state"],
+                missing_evidence=["who stopped it and why (activity log: Microsoft.Web/sites/stop/action)"],
+                doc_refs=[ctx.ref("deployment", "Verify Deployment")],
+                remediation_ids=[a.id for a in acts],
+                component="App Service",
+            ),
+            acts,
+        )
+    ]
+
+
 @rule(30)
 def post_provision_incomplete(ctx):
     out = []
@@ -697,28 +726,67 @@ def public_access_disabled(ctx):
     dis = ctx.facts.get("public_access_disabled") or []
     if not dis or ctx.facts.get("has_private_endpoints"):
         return []
-    a = build_action(
-        "enable-public-network-access", ctx.profile, doc_refs=[ctx.ref("deployment", "public network access")]
+    enforcers = ctx.facts.get("policy_enforcers") or {}
+    env_map = (ctx.facts.get("param_env_map") or {}).get("deploymentFlavor") or {}
+    flavor = ctx.env.get(env_map.get("env")) or env_map.get("default") or "unknown"
+    waf = flavor == "avm-waf"
+    policies = [(res, p) for res, plist in enforcers.items() for p in plist]
+    guide = ctx.ref("deployment", "Choose Deployment Type")
+    base = [f"publicNetworkAccess=Disabled / ACL Deny on {dis}; no private endpoints in the resource group"]
+    contra: List[str] = []
+    rationale: List[str] = []
+    for res, p in policies:
+        rationale.append(
+            f"Azure Policy '{p['definition']}' ({p['action']}, assignment '{p['assignment']}', set at "
+            f"{p['scope_level']} level) is enforced on {res} — live 'az policy state list'"
+        )
+    if not waf:
+        rationale.append(
+            f"deployment flavor is '{flavor}' (non-WAF): cosmos-db-nosql.bicep sets no network restriction, so "
+            "Disabled did not come from this template"
+        )
+    if any(p["action"] == "modify" for _, p in policies):
+        rationale.append(
+            "a 'modify' policy rewrites the setting every time it changes — re-enabling public access (including the "
+            "post-provision script's temporary firewall rule) is reverted by the policy"
+        )
+    rationale += base
+    if not policies:
+        contra.append(
+            "no enforcing policy was found (needs Reader on policy states) — a manual change is also possible"
+        )
+    acts: List[Action] = []
+    if policies:
+        acts.append(build_action("request-policy-exemption", ctx.profile, policies=[p for _, p in policies]))
+    else:
+        acts.append(
+            build_action(
+                "enable-public-network-access", ctx.profile, doc_refs=[ctx.ref("deployment", "public network")]
+            )
+        )
+    acts.append(build_action("use-waf-deployment", ctx.profile, doc_refs=[guide]))
+    acts = [a for a in acts if a]
+    title = (
+        "Tenant policy forces public network access OFF on a non-WAF deployment"
+        if policies and not waf
+        else "Public network access is disabled on dependencies and there are no private endpoints"
     )
     return [
         (
             Hypothesis(
                 "public-access-disabled",
-                "Public network access disabled on dependencies without private "
-                "endpoints (often tenant security policy)",
-                LIKELY,
+                title,
+                CONFIRMED if policies else LIKELY,
                 "high",
-                [
-                    f"publicNetworkAccess=Disabled / ACL Deny on {dis}",
-                    "no private endpoints in the resource group",
-                    "DeploymentGuide notes tenant restrictions may block public network access",
-                ],
+                rationale,
                 supporting_checks=["network.public_access"],
-                doc_refs=a.doc_refs,
-                remediation_ids=[a.id],
-                component="Networking",
+                contradicting=contra,
+                doc_refs=[guide, ctx.ref("deployment", "tenants may have additional security")],
+                source_refs=["infra/bicep/modules/data/cosmos-db-nosql.bicep"],
+                remediation_ids=[a.id for a in acts],
+                component="Networking / Azure Policy",
             ),
-            [a],
+            acts,
         )
     ]
 

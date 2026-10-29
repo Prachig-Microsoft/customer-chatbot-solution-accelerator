@@ -38,6 +38,7 @@ EXECUTABLE_ACTIONS = frozenset(
         "build-push-images",
         "run-post-provision",
         "restart-webapp",
+        "start-webapp",
         "assign-app-role",
     }
 )
@@ -268,6 +269,43 @@ def build_action(action_id: str, profile: Dict[str, Any], **p: Any) -> Optional[
             risk="Security posture change; needs security owner approval.",
             params=p,
             doc_refs=p.get("doc_refs", []),
+        )
+    if action_id == "request-policy-exemption":
+        names = "; ".join(
+            f"{x['definition']} (assignment {x['assignment']}, {x['scope_level']})" for x in p["policies"]
+        )
+        return Action(
+            action_id,
+            "Ask the governance owner for a policy exemption",
+            RESTRICTED,
+            f"Policy {names} forces public network access off. Re-enabling it yourself is reverted by the policy. Ask "
+            "whoever owns that policy assignment to exempt this resource group (or resource), or choose the private "
+            "networking deployment instead.",
+            risk="Security-governance decision; not automatable and not yours to bypass.",
+            params=p,
+        )
+    if action_id == "use-waf-deployment":
+        return Action(
+            action_id,
+            "Alternative: deploy the private-networking (WAF) flavor",
+            MANUAL,
+            "If the tenant must keep public access off, the documented path is the WAF flavor with private endpoints "
+            "(needs a new environment, a VM admin login, and more cost). Not required if an exemption is granted.",
+            commands=["azd env new <new-env-name>", "azd env set AZURE_ENV_DEPLOYMENT_FLAVOR avm-waf", "azd up"],
+            risk="New full deployment (cost and time); the current one is not changed.",
+            params=p,
+            doc_refs=p.get("doc_refs", []),
+        )
+    if action_id == "start-webapp":
+        return Action(
+            action_id,
+            f"Start App Service {p['app']}",
+            APPROVAL_REQUIRED,
+            "The app is stopped; start it.",
+            commands=[f"az webapp start --resource-group {p['resource_group']} --name {p['app']}"],
+            risk="Starts the app only; it was stopped on purpose by someone, check first.",
+            verify_checks=["webapp.state", "webapp.health"],
+            params=p,
         )
     if action_id == "purge-soft-deleted":
         return Action(

@@ -645,6 +645,32 @@ def ai_deployments(ctx: DiagContext) -> CheckResult:
     return CheckResult("ai.deployments", title, status, summary, evidence={"account": acct, "deployments": deps})
 
 
+def _enforcing_policies(ctx: DiagContext, resource_id: str) -> List[Dict[str, Any]]:
+    """Azure Policy modify/deny/deployIfNotExists assignments that actively change or block this resource."""
+    ok, states, _ = ctx.az("policy", "state", "list", "--resource", resource_id)
+    if not ok or not isinstance(states, list):
+        return []
+    seen, out = set(), []
+    for s in states:
+        action = (s.get("policyDefinitionAction") or "").lower()
+        if action not in ("modify", "deny", "deployifnotexists", "denyaction"):
+            continue
+        key = (s.get("policyAssignmentName"), s.get("policyDefinitionName"))
+        if key in seen:
+            continue
+        seen.add(key)
+        scope = s.get("policyAssignmentScope") or ""
+        out.append(
+            {
+                "action": action,
+                "assignment": s.get("policyAssignmentName"),
+                "definition": s.get("policyDefinitionName"),
+                "scope_level": "management group" if "managementGroups" in scope else "subscription/resource group",
+            }
+        )
+    return out
+
+
 @check(
     "network.public_access",
     "Public network access on data/AI services",
@@ -673,6 +699,7 @@ def network_access(ctx: DiagContext) -> CheckResult:
         "microsoft.documentdb/databaseaccounts": ("cosmosdb", "show"),
     }
     rows, disabled = [], []
+    policy_enforcers: Dict[str, List[Dict[str, Any]]] = {}
     has_pe = any((r.get("type") or "").lower() == "microsoft.network/privateendpoints" for r in resources)
     for r in resources:
         cmd = checks.get((r.get("type") or "").lower())
@@ -696,8 +723,11 @@ def network_access(ctx: DiagContext) -> CheckResult:
         )
         if (pna or "").lower() == "disabled" or (acl or "").lower() == "deny":
             disabled.append(r["name"])
+            if data.get("id"):
+                policy_enforcers[r["name"]] = _enforcing_policies(ctx, data["id"])
     ctx.facts["public_access_disabled"] = disabled
     ctx.facts["has_private_endpoints"] = has_pe
+    ctx.facts["policy_enforcers"] = policy_enforcers
     ref = [ctx.ref("deployment", "blocking public network access")]
     if disabled and not has_pe:
         return CheckResult(

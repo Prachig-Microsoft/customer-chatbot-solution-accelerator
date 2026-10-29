@@ -202,6 +202,15 @@ The folder is self-contained and has no dependencies beyond Python 3.10+ and the
 `preflight` prints **NOT CHECKED** (exit code 3), never GO, when no live quota check could run (offline, not logged
 in, or the repo could not be found).
 
+## Demo scenarios (all reversible, all verified live on a real deployment)
+
+| # | Break | Ask | The agent shows |
+|---|---|---|---|
+| 1 | `az webapp stop -g <rg> -n <api-app>` | `diagnose "the chat is not responding"` | confirmed: App Service stopped, HTTP 403 probe; then `fix start-webapp --approve` starts it and verifies fail→pass |
+| 2 | blank one setting: `az webapp config appsettings set -g <rg> -n <api-app> --settings COSMOS_DB_ENDPOINT=` | `diagnose "I changed a setting and chat stopped"` | the exact missing setting + the Bicep lines that declare it (restore the value afterwards) |
+| 3 | submit a deployment requesting 5000K TPM of the chat model on the AI account (Azure rejects it, nothing is created) | `diagnose "my deployment failed"` (no error pasted) | confirmed InsufficientQuota read from the failed ARM operation, with requested vs available numbers (delete the failed deployment record afterwards) |
+| 4 | nothing to break: tenant policy | `diagnose "chat does not work, network?"` | confirmed: Azure Policy forces Cosmos public access off (policy name, assignment, scope level), flavor is non-WAF so it did not come from the template; options: policy exemption (restricted) or the WAF flavor (manual) |
+
 ## Extending to another accelerator
 
 1. Add `accel_troubleshooter/profiles/<id>.json`, copying an existing profile. Fill in the fingerprint, docs per

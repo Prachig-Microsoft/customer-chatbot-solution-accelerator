@@ -52,6 +52,7 @@ READ_ONLY_PREFIXES = [
     "cosmosdb sql role assignment list",
     "search service show",
     "monitor activity-log list",
+    "policy state list",
 ]
 
 ALLOWED_HTTP_HOST_SUFFIXES = (".azurewebsites.net", "localhost", "127.0.0.1")

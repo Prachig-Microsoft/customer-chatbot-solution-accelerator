@@ -243,7 +243,7 @@ def render_compact(d: Dict[str, Any], kind: str = "diagnose", plain: bool = Fals
         out += ["", "FINDINGS"]
         for i, h in enumerate(findings, 1):
             out.append(f"  {i}. {_t(h['title'], 90)}  [{h['status']} · {h['confidence']}]")
-            for r in h["rationale"][:2]:
+            for r in h["rationale"][:3]:
                 out.append(f"     • {_t(r, 110)}")
             refs = [x for x in dict.fromkeys(h["doc_refs"] + h["source_refs"]) if x][:3]
             if refs:

@@ -229,6 +229,88 @@ def test_arm_quota_failure_uses_the_numbers_in_azures_own_error(synthetic_fixtur
     assert "RESULT" not in render_compact(d.to_dict()) and "LIKELY CAUSE" in render_compact(d.to_dict())
 
 
+def test_policy_enforced_public_access_is_confirmed_on_non_waf_and_waf_is_only_an_alternative(
+    synthetic_fixture, synthetic_env_file
+):
+    """Real case captured live: Cosmos forced to public-access Disabled by an MCAPS 'modify' policy."""
+    cosmos = {
+        "name": "cosmos-demo",
+        "id": "/subscriptions/00000000-0000-0000-0000-00000000aaaa/resourceGroups/rg-demo/providers/"
+        "Microsoft.DocumentDB/databaseAccounts/cosmos-demo",
+        "publicNetworkAccess": "Disabled",
+    }
+    fx = _fixture(
+        synthetic_fixture,
+        **{
+            "cosmosdb show --resource-group rg-demo --name cosmos-demo": {"exit_code": 0, "stdout": cosmos},
+            "policy state list --resource *": {
+                "exit_code": 0,
+                "stdout": [
+                    {
+                        "policyDefinitionAction": "audit",
+                        "policyAssignmentName": "Baseline",
+                        "policyDefinitionName": "d1",
+                    },
+                    {
+                        "policyDefinitionAction": "modify",
+                        "policyAssignmentName": "GovDeploy",
+                        "policyDefinitionName": "CosmosDB_PublicNetwork_Modify",
+                        "policyAssignmentScope": "/providers/Microsoft.Management/managementGroups/mg1",
+                    },
+                ],
+            },
+        },
+    )
+    ts = Troubleshooter(REPO_ROOT, ReplayRunner(fx))
+    d = ts.diagnose("the chat does not work", env_file=synthetic_env_file, full=True, log=False)
+    h = next(x for x in d.hypotheses if x.id == "public-access-disabled")
+    assert h.status == "confirmed" and h.confidence == "high" and "non-WAF" in h.title
+    text = " ".join(h.rationale)
+    assert "CosmosDB_PublicNetwork_Modify" in text and "management group" in text
+    assert "deployment flavor is 'bicep' (non-WAF)" in text and "reverted by the policy" in text
+    ids = [k.split("#")[0] for k in d.actions]
+    assert "request-policy-exemption" in ids and "use-waf-deployment" in ids
+    assert "enable-public-network-access" not in ids  # re-enabling is pointless when a modify policy reverts it
+    assert d.actions["use-waf-deployment"].category == "manual_review"
+    assert d.actions["request-policy-exemption"].category == "restricted"
+
+
+def test_public_access_off_without_a_found_policy_stays_likely_not_confirmed(synthetic_fixture, synthetic_env_file):
+    fx = _fixture(
+        synthetic_fixture,
+        **{
+            "cosmosdb show --resource-group rg-demo --name cosmos-demo": {
+                "exit_code": 0,
+                "stdout": {"name": "cosmos-demo", "id": "/x/cosmos-demo", "publicNetworkAccess": "Disabled"},
+            }
+        },
+    )
+    d = Troubleshooter(REPO_ROOT, ReplayRunner(fx)).diagnose(
+        "chat fails", env_file=synthetic_env_file, full=True, log=False
+    )
+    h = next(x for x in d.hypotheses if x.id == "public-access-disabled")
+    assert h.status == "likely" and h.contradicting
+
+
+def test_stopped_app_is_confirmed_and_start_is_an_approved_executable_action(synthetic_fixture, synthetic_env_file):
+    fx = _fixture(synthetic_fixture)
+    fx["commands"]["webapp show --resource-group rg-demo --name api-chat-demo"]["stdout"]["state"] = "Stopped"
+    fx["commands"]["HTTP GET https://api-chat-demo.azurewebsites.net/health"] = {
+        "exit_code": 403,
+        "stdout": {"status": 403, "body_excerpt": "Site Disabled", "error": ""},
+    }
+    d = Troubleshooter(REPO_ROOT, ReplayRunner(fx)).diagnose(
+        "chat is not responding", env_file=synthetic_env_file, full=True, log=False
+    )
+    top = d.hypotheses[0]
+    assert top.id == "app-stopped" and top.status == "confirmed"
+    act = d.actions["start-webapp"]
+    from accel_troubleshooter.actions import EXECUTABLE_ACTIONS
+
+    assert act.category == "approval_required" and "start-webapp" in EXECUTABLE_ACTIONS
+    assert act.commands == ["az webapp start --resource-group rg-demo --name api-chat-demo"]
+
+
 def test_empty_resource_group_is_not_called_a_failure(synthetic_fixture, synthetic_env_file):
     fx = _fixture(
         synthetic_fixture,
