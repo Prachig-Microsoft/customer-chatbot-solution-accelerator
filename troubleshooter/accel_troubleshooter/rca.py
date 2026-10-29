@@ -782,7 +782,7 @@ def public_access_disabled(ctx):
                 value=exempt.get("value", ""),
                 resource_group=rg,
                 resources=ctx.facts.get("resource_ids", {}),
-                bicep_ref="infra/main.bicep:49 (param tags)",
+                bicep_ref=ctx.doc_ref("infra/main.bicep", r"^param tags "),
             )
         )
     if policies:

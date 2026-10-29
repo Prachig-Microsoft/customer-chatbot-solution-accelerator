@@ -409,6 +409,7 @@ def test_missing_exemption_tag_is_named_from_the_policys_own_rule(synthetic_fixt
     assert any("--public-network-access ENABLED" in c for c in act.commands)
     assert "LocalAuth" not in " ".join(h.rationale)  # a local-auth policy is not the cause of a network problem
     assert "never on production" in act.risk
+    assert "main.bicep:" in act.description and "param tags" in act.description
     ids = [k.split("#")[0] for k in d.actions]
     assert ids.index("apply-exemption-tag") < ids.index("request-policy-exemption")
 
