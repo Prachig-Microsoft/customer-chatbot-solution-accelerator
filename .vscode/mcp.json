@@ -3,8 +3,7 @@
     "accelerator-troubleshooter": {
       "type": "stdio",
       "command": "python",
-      "args": ["-m", "accel_troubleshooter.mcp_server"],
-      "cwd": "${workspaceFolder}/troubleshooter"
+      "args": ["troubleshooter/mcp_launcher.py"]
     }
   }
 }

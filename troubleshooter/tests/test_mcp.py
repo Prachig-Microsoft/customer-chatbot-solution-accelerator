@@ -8,6 +8,15 @@ from conftest import TOOL_ROOT
 mcp = pytest.importorskip("mcp")
 
 
+def test_mcp_config_does_not_depend_on_variable_expansion_or_cwd():
+    import json
+
+    cfg = json.loads((TOOL_ROOT.parent / ".vscode" / "mcp.json").read_text(encoding="utf-8"))
+    srv = cfg["servers"]["accelerator-troubleshooter"]
+    assert "cwd" not in srv and "${" not in json.dumps(srv)
+    assert (TOOL_ROOT.parent / srv["args"][0]).is_file()
+
+
 def test_mcp_server_lists_read_only_tools():
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
@@ -15,8 +24,9 @@ def test_mcp_server_lists_read_only_tools():
     result = {}
 
     async def run():
+        # Launch exactly like .vscode/mcp.json does, from the repo root rather than the troubleshooter folder.
         params = StdioServerParameters(
-            command=sys.executable, args=["-m", "accel_troubleshooter.mcp_server"], cwd=str(TOOL_ROOT)
+            command=sys.executable, args=["troubleshooter/mcp_launcher.py"], cwd=str(TOOL_ROOT.parent)
         )
         async with stdio_client(params) as (read, write):
             async with ClientSession(read, write) as session:

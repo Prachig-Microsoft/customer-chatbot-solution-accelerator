@@ -151,7 +151,8 @@ exposes no execution tool.
 ## Copilot / MCP
 
 `.vscode/mcp.json` registers the stdio server `accelerator-troubleshooter`
-(`python -m accel_troubleshooter.mcp_server`, requires `pip install -r requirements-mcp.txt`). Its tools are
+(`python troubleshooter/mcp_launcher.py`, with no `cwd` or `${workspaceFolder}` so it starts from any host; requires
+`pip install -r troubleshooter/requirements-mcp.txt`). Its tools are
 `identify_accelerator`, `search_docs`, `diagnose`, `quota_check`, `preflight` and `list_checks`, all read-only.
 In VS Code, pick the **accelerator-troubleshooter** custom agent in Copilot Chat and describe the problem.
 
