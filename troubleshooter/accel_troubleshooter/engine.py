@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -138,6 +139,32 @@ class Troubleshooter:
                         changed = True
         return sorted(selected, key=lambda c: CHECKS[c].order)
 
+    def run_waves(self, planned: List[str], ctx: DiagContext, workers: int = 6) -> None:
+        """Run checks level by level (a check waits for the checks it depends on); checks on one level run in parallel.
+
+        Independent Azure CLI calls dominate the run time, so this cuts a full health check roughly in half.
+        """
+        deps = {c: [d for d in DEPENDS.get(c, []) if d in planned] for c in planned}
+        if "models.availability" in planned and not ctx.ai_region and "quota.models" in planned:
+            deps["models.availability"].append("quota.models")  # it falls back to the best region found by quota
+        level: Dict[str, int] = {}
+
+        def depth(cid: str, seen: tuple = ()) -> int:
+            if cid not in level:
+                level[cid] = 0 if not deps[cid] or cid in seen else 1 + max(depth(d, seen + (cid,)) for d in deps[cid])
+            return level[cid]
+
+        for cid in planned:
+            depth(cid)
+        for lvl in sorted(set(level.values())):
+            wave = [c for c in planned if level[c] == lvl]
+            if len(wave) == 1 or self.runner.mode == "replay":
+                for cid in wave:  # replay stays sequential so recorded fixtures behave deterministically
+                    run_check(CHECKS[cid], ctx)
+                continue
+            with ThreadPoolExecutor(max_workers=min(workers, len(wave))) as pool:
+                list(pool.map(lambda c: run_check(CHECKS[c], ctx), wave))
+
     # ------------------------------------------------------------------ main entry
     def diagnose(
         self,
@@ -218,9 +245,8 @@ class Troubleshooter:
         planned = self.plan_checks(issue, full, only_checks)
         if self.runner.mode != "offline" and any(c in NEEDS_RG for c in planned):
             ctx.resolve_resource_group(prompt_rg)
-        for cid in planned:
-            run_check(CHECKS[cid], ctx)
-        diag.checks = list(ctx.results.values())
+        self.run_waves(planned, ctx)
+        diag.checks = [ctx.results[c] for c in planned if c in ctx.results]
         diag.targets = {
             "resource_group": ctx.resource_group or None,
             "resource_group_source": ctx.resource_group_source,

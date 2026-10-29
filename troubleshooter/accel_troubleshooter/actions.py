@@ -270,6 +270,28 @@ def build_action(action_id: str, profile: Dict[str, Any], **p: Any) -> Optional[
             params=p,
             doc_refs=p.get("doc_refs", []),
         )
+    if action_id == "apply-exemption-tag":
+        tag = f"{p['tag']}={p['value']}" if p.get("value") else p["tag"]
+        rg_cmd = f"az tag update --resource-id <resource-group-id> --operation merge --tags {tag}"
+        cmds = [
+            rg_cmd,
+            "az cosmosdb update --resource-group " + p["resource_group"] + " --name <cosmos-account> "
+            "--public-network-access ENABLED",
+        ]
+        return Action(
+            action_id,
+            f"Add the policy's exemption tag ({tag}) and re-enable public access",
+            MANUAL,
+            f"The policy skips resources tagged {tag}. For the NEXT deployment put it in the template "
+            f"(`param tags object = {{ {p['tag']}: '{p.get('value', '')}' }}`, {p.get('bicep_ref')}). For this one: "
+            "tag the resource group, then set Cosmos public access back to Enabled (the policy only acts on writes, "
+            "so the tag must be in place first), and re-enable it after the post-provision script, which restores "
+            "the old 'Disabled' value when it finishes.",
+            commands=cmds,
+            risk="Uses the tenant's own sanctioned exemption tag, but it still weakens a security control: use it only "
+            "where your organisation's guidance allows it (for example dev/test), and never on production data.",
+            params=p,
+        )
     if action_id == "request-policy-exemption":
         names = "; ".join(
             f"{x['definition']} (assignment {x['assignment']}, {x['scope_level']})" for x in p["policies"]

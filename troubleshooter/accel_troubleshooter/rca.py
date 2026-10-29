@@ -730,7 +730,7 @@ def public_access_disabled(ctx):
     env_map = (ctx.facts.get("param_env_map") or {}).get("deploymentFlavor") or {}
     flavor = ctx.env.get(env_map.get("env")) or env_map.get("default") or "unknown"
     waf = flavor == "avm-waf"
-    policies = [(res, p) for res, plist in enforcers.items() for p in plist]
+    policies = [(res, p) for res, plist in enforcers.items() for p in plist if p.get("public_access", True)]
     guide = ctx.ref("deployment", "Choose Deployment Type")
     base = [f"publicNetworkAccess=Disabled / ACL Deny on {dis}; no private endpoints in the resource group"]
     contra: List[str] = []
@@ -755,7 +755,36 @@ def public_access_disabled(ctx):
         contra.append(
             "no enforcing policy was found (needs Reader on policy states) — a manual change is also possible"
         )
+    # Does the policy skip tagged resources, and are we missing that tag? (read from the policy's own rule)
+    exempt = next((p["exempt_tag"] for _, p in policies if p.get("exempt_tag")), None)
+    tag_missing = False
+    if exempt and exempt.get("name"):
+        rg_tags = ctx.facts.get("rg_tags") or {}
+        res_tags = ctx.facts.get("resource_tags") or {}
+        want = (exempt["name"], exempt.get("value", ""))
+        has = lambda tags: str(tags.get(want[0], "")).lower() == want[1].lower()  # noqa: E731
+        tag_missing = not has(rg_tags) and not any(has(t) for t in res_tags.values())
+        tag_txt = f"{want[0]}={want[1]}" if want[1] else want[0]
+        if tag_missing:
+            rationale.insert(
+                0,
+                f"the policy skips {exempt['scope']} when it is tagged {tag_txt} ({exempt['source']}); neither the "
+                f"resource group (tags: {sorted(rg_tags)}) nor {sorted(res_tags)} carries it, so the policy applied",
+            )
     acts: List[Action] = []
+    if tag_missing:
+        rg = ctx.resource_group
+        acts.append(
+            build_action(
+                "apply-exemption-tag",
+                ctx.profile,
+                tag=exempt["name"],
+                value=exempt.get("value", ""),
+                resource_group=rg,
+                resources=ctx.facts.get("resource_ids", {}),
+                bicep_ref="infra/main.bicep:49 (param tags)",
+            )
+        )
     if policies:
         acts.append(build_action("request-policy-exemption", ctx.profile, policies=[p for _, p in policies]))
     else:
@@ -766,11 +795,12 @@ def public_access_disabled(ctx):
         )
     acts.append(build_action("use-waf-deployment", ctx.profile, doc_refs=[guide]))
     acts = [a for a in acts if a]
-    title = (
-        "Tenant policy forces public network access OFF on a non-WAF deployment"
-        if policies and not waf
-        else "Public network access is disabled on dependencies and there are no private endpoints"
-    )
+    if tag_missing:
+        title = f"Tenant policy turned Cosmos public access OFF because the '{exempt['name']}' exemption tag is missing"
+    elif policies and not waf:
+        title = "Tenant policy forces public network access OFF on a non-WAF deployment"
+    else:
+        title = "Public network access is disabled on dependencies and there are no private endpoints"
     return [
         (
             Hypothesis(

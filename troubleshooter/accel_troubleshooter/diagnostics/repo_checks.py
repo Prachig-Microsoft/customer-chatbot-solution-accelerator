@@ -86,6 +86,12 @@ def effective_model_requirements(ctx: DiagContext) -> List[Dict[str, Any]]:
 @check("repo.azd_env", "azd environment present and complete", stages=["*"], needs_azure=False, order=1)
 def azd_env(ctx: DiagContext) -> CheckResult:
     keys = ctx.profile.get("azd_env_keys", {})
+    iac_cfg = ctx.profile.get("iac", {})
+    param_for = {"ai_location": iac_cfg.get("ai_location_param"), "location": iac_cfg.get("location_param")}
+
+    def known(logical: str, envvar: str) -> bool:  # azd keeps the prompted answers in config.json as well as .env
+        return bool(ctx.env.get(envvar) or (param_for.get(logical) and ctx.env.params.get(param_for[logical])))
+
     if not ctx.env.found:
         return CheckResult(
             "repo.azd_env",
@@ -99,7 +105,7 @@ def azd_env(ctx: DiagContext) -> CheckResult:
                 "resource_group_source": ctx.resource_group_source,
             },
         )
-    missing = [v for v in keys.values() if not ctx.env.get(v)]
+    missing = [v for k, v in keys.items() if not known(k, v)]
     placeholders = sorted(k for k, v in ctx.env.values.items() if PLACEHOLDER.search(v or ""))
     empty = sorted(k for k, v in ctx.env.values.items() if v == "" and not k.endswith(("KEY", "SECRET")))
     # Most keys (resource names, URLs) only exist after provisioning. Only these are needed beforehand, and azd
@@ -110,16 +116,23 @@ def azd_env(ctx: DiagContext) -> CheckResult:
     missing_now = [k for k, v in needed_now.items() if v and not ctx.env.get(v)]
     has_ai_region = bool(ctx.env.get(keys.get("ai_location")) or ctx.env.params.get(ai_param))
     deployed = bool(ctx.env.get(keys.get("resource_group")))
+    finished = deployed and any(ctx.env.get(a.get("url_env")) for a in ctx.profile.get("apps", []))
     status = WARN if missing_now else PASS
-    summary = f"azd env '{ctx.env.name}': " + (
-        "provisioning started (resource group recorded)." if deployed else "not deployed yet."
+    state = (
+        "deployed (app URLs recorded)."
+        if finished
+        else "provisioning started (resource group recorded)." if deployed else "not deployed yet."
     )
+    summary = f"azd env '{ctx.env.name}': {state}"
     if missing_now:
         summary += f" Not set: {missing_now}."
     if not has_ai_region and not deployed:
         summary += f" AI region not chosen yet (azd will ask, or: azd env set {keys.get('ai_location')} <region>)."
-    if deployed and missing:
+    if deployed and missing and not finished:
         summary += f" {len(missing)} output(s) not recorded yet (normal until provisioning finishes)."
+        status = INFO if status == PASS else status
+    elif finished and missing:
+        summary += f" Missing recorded value(s): {missing[:3]}."
         status = INFO if status == PASS else status
     if placeholders:
         summary += (

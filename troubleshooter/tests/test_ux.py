@@ -226,7 +226,9 @@ def test_arm_quota_failure_uses_the_numbers_in_azures_own_error(synthetic_fixtur
     assert not top.contradicting
     assert not any("Exact error code" in m for m in d.missing_evidence)
     assert not any("Approximate time" in m for m in d.missing_evidence)
-    assert "RESULT" not in render_compact(d.to_dict()) and "LIKELY CAUSE" in render_compact(d.to_dict())
+    shown = render_compact(d.to_dict())
+    assert "RESULT" not in shown and "CAUSE  Insufficient Azure OpenAI model quota" in shown
+    assert "[confirmed · high" in shown
 
 
 def test_policy_enforced_public_access_is_confirmed_on_non_waf_and_waf_is_only_an_alternative(
@@ -311,6 +313,173 @@ def test_stopped_app_is_confirmed_and_start_is_an_approved_executable_action(syn
     assert act.commands == ["az webapp start --resource-group rg-demo --name api-chat-demo"]
 
 
+def _policy_fixture(synthetic_fixture, rg_tags=None, resource_tags=None):
+    cosmos = {
+        "name": "cosmos-demo",
+        "id": "/subscriptions/00000000-0000-0000-0000-00000000aaaa/resourceGroups/rg-demo/providers/"
+        "Microsoft.DocumentDB/databaseAccounts/cosmos-demo",
+        "publicNetworkAccess": "Disabled",
+        "tags": resource_tags or {},
+    }
+    rule = {
+        "if": {
+            "allOf": [
+                {"field": "type", "equals": "Microsoft.DocumentDB/databaseAccounts"},
+                {"field": "Microsoft.DocumentDB/databaseAccounts/publicNetworkAccess", "notEquals": "Disabled"},
+                {
+                    "not": {
+                        "anyOf": [
+                            {
+                                "field": "[concat('tags[', parameters('AllowedTagName'), ']')]",
+                                "equals": "[parameters('AllowedTagValue')]",
+                            },
+                            {
+                                "value": "[resourceGroup().tags[parameters('AllowedTagName')]]",
+                                "equals": "[parameters('AllowedTagValue')]",
+                            },
+                        ]
+                    }
+                },
+            ]
+        },
+        "then": {"effect": "modify"},
+    }
+    fx = _fixture(
+        synthetic_fixture,
+        **{
+            "cosmosdb show --resource-group rg-demo --name cosmos-demo": {"exit_code": 0, "stdout": cosmos},
+            "policy state list --resource *": {
+                "exit_code": 0,
+                "stdout": [
+                    {
+                        "policyDefinitionAction": "modify",
+                        "policyAssignmentName": "GovDeploy",
+                        "policyDefinitionName": "CosmosDB_PublicNetwork_Modify",
+                        "policyAssignmentScope": "/providers/Microsoft.Management/managementGroups/mg1",
+                    },
+                    {
+                        "policyDefinitionAction": "modify",
+                        "policyAssignmentName": "GovDeploy",
+                        "policyDefinitionName": "CosmosDB_LocalAuth_Modify",
+                        "policyAssignmentScope": "/providers/Microsoft.Management/managementGroups/mg1",
+                    },
+                ],
+            },
+            "policy definition show --name CosmosDB_LocalAuth_Modify --management-group mg1": {
+                "exit_code": 0,
+                "stdout": {
+                    "displayName": "local auth",
+                    "policyRule": {
+                        "then": {
+                            "details": {
+                                "operations": [{"field": "Microsoft.DocumentDB/databaseAccounts/disableLocalAuth"}]
+                            }
+                        }
+                    },
+                    "parameters": {},
+                },
+            },
+            "policy definition show --name CosmosDB_PublicNetwork_Modify --management-group mg1": {
+                "exit_code": 0,
+                "stdout": {
+                    "displayName": "SFI Cosmos DB",
+                    "policyRule": rule,
+                    "parameters": {
+                        "AllowedTagName": {"defaultValue": "SecurityControl"},
+                        "AllowedTagValue": {"defaultValue": "Ignore"},
+                    },
+                },
+            },
+        },
+    )
+    if rg_tags:
+        fx["commands"]["group show --name rg-demo"]["stdout"]["tags"] = rg_tags
+    return fx
+
+
+def test_missing_exemption_tag_is_named_from_the_policys_own_rule(synthetic_fixture, synthetic_env_file):
+    ts = Troubleshooter(REPO_ROOT, ReplayRunner(_policy_fixture(synthetic_fixture)))
+    d = ts.diagnose("chat does not work", env_file=synthetic_env_file, full=True, log=False)
+    h = next(x for x in d.hypotheses if x.id == "public-access-disabled")
+    assert h.status == "confirmed" and "'SecurityControl' exemption tag is missing" in h.title
+    assert "SecurityControl=Ignore" in h.rationale[0] and "applied" in h.rationale[0]
+    act = d.actions["apply-exemption-tag"]
+    assert act.category == "manual_review"  # weakens a security control: shown, never run by the agent
+    assert any("--tags SecurityControl=Ignore" in c for c in act.commands)
+    assert any("--public-network-access ENABLED" in c for c in act.commands)
+    assert "LocalAuth" not in " ".join(h.rationale)  # a local-auth policy is not the cause of a network problem
+    assert "never on production" in act.risk
+    ids = [k.split("#")[0] for k in d.actions]
+    assert ids.index("apply-exemption-tag") < ids.index("request-policy-exemption")
+
+
+def test_exemption_tag_already_present_is_not_blamed(synthetic_fixture, synthetic_env_file):
+    fx = _policy_fixture(synthetic_fixture, rg_tags={"SecurityControl": "Ignore"})
+    d = Troubleshooter(REPO_ROOT, ReplayRunner(fx)).diagnose(
+        "chat does not work", env_file=synthetic_env_file, full=True, log=False
+    )
+    h = next(x for x in d.hypotheses if x.id == "public-access-disabled")
+    assert "apply-exemption-tag" not in d.actions and "exemption tag is missing" not in h.title
+
+
+def test_colorize_only_adds_ansi_and_never_changes_the_text(synthetic_fixture, synthetic_env_file):
+    import re
+
+    from accel_troubleshooter.compact import colorize
+
+    d = _diag(
+        synthetic_fixture,
+        synthetic_env_file,
+        "quota check",
+        overrides={"capacity_overrides": {"gptDeploymentCapacity": 950}},
+    )
+    plain = render_compact(d.to_dict())
+    colored = colorize(plain)
+    assert colored != plain and "\x1b[" in colored
+    assert re.sub(r"\x1b\[[0-9;]*m", "", colored) == plain
+    assert "\x1b[31m" in colorize("  ❌ app services  broken")  # failures are red
+    assert colorize("PREFLIGHT: 🛑 NO-GO · x").startswith("\x1b[1m\x1b[31m")
+    assert colorize("PREFLIGHT: ✅ GO · x").startswith("\x1b[1m\x1b[32m")
+
+
+def test_colour_is_off_for_pipes_plain_mode_and_no_color(monkeypatch):
+    import io
+
+    from accel_troubleshooter.compact import color_enabled
+
+    tty = type("T", (io.StringIO,), {"isatty": lambda self: True})()
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.delenv("FORCE_COLOR", raising=False)
+    assert color_enabled(tty) and not color_enabled(io.StringIO())
+    assert not color_enabled(tty, plain=True) and not color_enabled(tty, force=False)
+    monkeypatch.setenv("NO_COLOR", "1")
+    assert not color_enabled(tty, force=True) is True or not color_enabled(tty)
+    monkeypatch.delenv("NO_COLOR")
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    assert color_enabled(io.StringIO())
+
+
+def test_parallel_checks_keep_their_own_commands_and_order(synthetic_fixture, synthetic_env_file):
+    """Replay is sequential by design, so drive the parallel path with a live-mode runner that serves fixtures."""
+    from accel_troubleshooter.azcli import ReplayRunner as _R
+
+    class ParallelRunner(_R):
+        mode = "live"  # makes the engine use thread pools
+
+    ts = Troubleshooter(REPO_ROOT, ParallelRunner(synthetic_fixture))
+    d = ts.diagnose("full health check", env_file=synthetic_env_file, full=True, log=False)
+    seq = Troubleshooter(REPO_ROOT, ReplayRunner(synthetic_fixture)).diagnose(
+        "full health check", env_file=synthetic_env_file, full=True, log=False
+    )
+    assert [c.check_id for c in d.checks] == [c.check_id for c in seq.checks]
+    assert [c.status for c in d.checks] == [c.status for c in seq.checks]
+    by_id = {c.check_id: c for c in d.checks}
+    assert all("providers" in c.command or "provider" in c.command for c in by_id["providers.registration"].commands)
+    assert all("webapp" in c.command or "HTTP" in c.command for c in by_id["webapp.state"].commands)
+    assert any("HTTP GET" in c.command for c in by_id["webapp.health"].commands)  # helper-thread probes are attributed
+    assert len(by_id["webapp.state"].commands) == 5  # 4 x show + 1 settings read, gathered from helper threads
+
+
 def test_empty_resource_group_is_not_called_a_failure(synthetic_fixture, synthetic_env_file):
     fx = _fixture(
         synthetic_fixture,
@@ -359,9 +528,9 @@ def test_preflight_go_is_a_short_answer_with_a_recommended_region(synthetic_fixt
     lines = text.splitlines()
     assert len(lines) <= 14, text
     assert lines[0].startswith("PREFLIGHT: ✅ GO")
-    assert "AI region         eastus2   (your azd env choice, quota OK)" in text
-    assert "Quota (K TPM)" in text and "need 50/free 900" in text
-    assert "Blocking          none" in text and "Other OK regions" in text
+    assert "▸ AI region: eastus2 — your azd env choice, quota OK" in text
+    assert "▸ Quota (K TPM):" in text and "need 50 / free 900" in text
+    assert "• Blocking: none" in text and "▸ Other OK regions:" in text
     assert "run -- azd up" in text and "azd env set" not in text  # region already chosen: nothing to set
 
 
@@ -369,8 +538,8 @@ def test_preflight_recommends_best_region_when_none_chosen(synthetic_fixture, tm
     env = tmp_path / "demo.env"
     env.write_text('AZURE_SUBSCRIPTION_ID="00000000-0000-0000-0000-00000000aaaa"\n', encoding="utf-8")
     text, _ = _preflight(synthetic_fixture, str(env))
-    assert "(best free quota" in text
-    assert "azd env set AZURE_ENV_AI_SERVICE_LOCATION " in text and "run -- azd up" in text
+    assert "AI region: " in text and "best free quota" in text
+    assert "▶ Next: azd env set AZURE_ENV_AI_SERVICE_LOCATION " in text and "run -- azd up" in text
 
 
 def test_preflight_no_go_lists_blockers_and_does_not_tell_you_to_deploy(synthetic_fixture, synthetic_env_file):
@@ -404,7 +573,7 @@ def test_preflight_no_go_lists_blockers_and_does_not_tell_you_to_deploy(syntheti
     )
     text, _ = _preflight(fx, synthetic_env_file)
     assert text.splitlines()[0].startswith("PREFLIGHT: 🛑 NO-GO")
-    assert "Blocking\n  ✗ model quota" in text and "need 50, available 10" in text
+    assert "• Blocking:" in text and "❌ model quota" in text and "need 50, available 10" in text
     assert "run -- azd up" not in text and "fix the blockers" in text
 
 
@@ -422,7 +591,7 @@ def test_compact_diagnose_leads_with_cause_evidence_and_next_step(synthetic_fixt
         overrides={"capacity_overrides": {"gptDeploymentCapacity": 950}},
     )
     text = render_compact(d.to_dict())
-    assert text.splitlines()[3].startswith("LIKELY CAUSE") or "LIKELY CAUSE" in text
+    assert "CAUSE  " in text
     assert "FINDINGS" in text and "NEXT" in text and "set-model-capacity" in text
     assert (
         len(text.splitlines())

@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..azcli import AzRunner, CommandNotAllowed
 from ..knowledge import KnowledgeIndex
-from ..models import ERROR, SKIP, CheckResult, CommandRecord, IssueContext
+from ..models import ERROR, SKIP, CheckResult, IssueContext
 from ..repo import AzdEnv, find_line
 
 
@@ -156,34 +157,55 @@ class DiagContext:
         return self.facts.get("rg_exists") is False
 
 
+def parallel_map(ctx: "DiagContext", fn: Callable[[Any], Any], items: List[Any], workers: int = 6) -> List[Any]:
+    """Run fn over items on helper threads (results keep input order); their commands count for the calling check."""
+    parent = ctx.runner.current_capture()
+
+    def wrapped(item):
+        ctx.runner.begin_capture(parent)
+        try:
+            return fn(item)
+        finally:
+            ctx.runner.end_capture()
+
+    if len(items) <= 1:
+        return [fn(i) for i in items]
+    with ThreadPoolExecutor(max_workers=min(workers, len(items))) as pool:
+        return list(pool.map(wrapped, items))
+
+
 def run_check(spec: CheckSpec, ctx: DiagContext) -> CheckResult:
     start = time.time()
-    before = len(ctx.runner.history)
-    if spec.needs_apps and not ctx.profile.get("apps"):
-        res = CheckResult(
-            spec.id,
-            spec.title,
-            SKIP,
-            f"Not implemented for profile '{ctx.profile['id']}' (no app definitions in profile).",
-        )
-    elif spec.needs_azure and ctx.runner.mode == "offline":
-        res = CheckResult(spec.id, spec.title, SKIP, "Offline mode: live Azure checks not executed.")
-    else:
-        try:
-            res = spec.fn(ctx)
-        except CommandNotAllowed as e:
-            res = CheckResult(spec.id, spec.title, ERROR, f"Blocked by safety policy: {e}")
-        except Exception as e:  # noqa: BLE001 - a failing check must never crash the diagnosis
+    captured = (
+        ctx.runner.begin_capture()
+    )  # this thread's commands belong to this check, even when checks run in parallel
+    try:
+        if spec.needs_apps and not ctx.profile.get("apps"):
             res = CheckResult(
                 spec.id,
                 spec.title,
-                ERROR,
-                f"Check raised {type(e).__name__}: {e}",
-                evidence={"traceback": traceback.format_exc(limit=3)},
+                SKIP,
+                f"Not implemented for profile '{ctx.profile['id']}' (no app definitions in profile).",
             )
-    new_cmds: List[CommandRecord] = ctx.runner.history[before:]
+        elif spec.needs_azure and ctx.runner.mode == "offline":
+            res = CheckResult(spec.id, spec.title, SKIP, "Offline mode: live Azure checks not executed.")
+        else:
+            try:
+                res = spec.fn(ctx)
+            except CommandNotAllowed as e:
+                res = CheckResult(spec.id, spec.title, ERROR, f"Blocked by safety policy: {e}")
+            except Exception as e:  # noqa: BLE001 - a failing check must never crash the diagnosis
+                res = CheckResult(
+                    spec.id,
+                    spec.title,
+                    ERROR,
+                    f"Check raised {type(e).__name__}: {e}",
+                    evidence={"traceback": traceback.format_exc(limit=3)},
+                )
+    finally:
+        ctx.runner.end_capture()
     if not res.commands:
-        res.commands = list(new_cmds)
+        res.commands = list(captured)
     res.duration_ms = int((time.time() - start) * 1000)
     ctx.results[spec.id] = res
     return res

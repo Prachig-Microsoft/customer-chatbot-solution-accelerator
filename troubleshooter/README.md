@@ -51,10 +51,12 @@ Every command that needs a resource group finds it the same way, and prints wher
 
 ### Output
 
-The default output is a compact summary (verdict or likely cause, one line per check, quota, top findings with their
-evidence and doc references, next commands, what is still missing). `--format full` prints the complete Markdown report,
-`--out report.md` saves the complete report while still printing the summary, `--format json` is for tooling, and
-`--plain` swaps emoji for ASCII markers.
+The default output is a compact **bullet** summary (verdict or cause, one bullet per check, quota, top findings with their
+evidence and doc references, next commands, what is still missing). It is coloured on a real terminal (green = OK /
+GO, red = failure / NO-GO, yellow = warning or unconfirmed, cyan = commands, dim = detail). Colour is off when output is
+piped or redirected, with `--plain` (also ASCII markers instead of emoji) or `--no-color`, or when `NO_COLOR` is set;
+`--color` forces it on. `--format full` prints the complete Markdown report, `--out report.md` saves the complete
+report while still printing the summary, and `--format json` is for tooling.
 
 ### `run -- <command>`
 
@@ -209,7 +211,7 @@ in, or the repo could not be found).
 | 1 | `az webapp stop -g <rg> -n <api-app>` | `diagnose "the chat is not responding"` | confirmed: App Service stopped, HTTP 403 probe; then `fix start-webapp --approve` starts it and verifies fail→pass |
 | 2 | blank one setting: `az webapp config appsettings set -g <rg> -n <api-app> --settings COSMOS_DB_ENDPOINT=` | `diagnose "I changed a setting and chat stopped"` | the exact missing setting + the Bicep lines that declare it (restore the value afterwards) |
 | 3 | submit a deployment requesting 5000K TPM of the chat model on the AI account (Azure rejects it, nothing is created) | `diagnose "my deployment failed"` (no error pasted) | confirmed InsufficientQuota read from the failed ARM operation, with requested vs available numbers (delete the failed deployment record afterwards) |
-| 4 | nothing to break: tenant policy | `diagnose "chat does not work, network?"` | confirmed: Azure Policy forces Cosmos public access off (policy name, assignment, scope level), flavor is non-WAF so it did not come from the template; options: policy exemption (restricted) or the WAF flavor (manual) |
+| 4 | nothing to break: tenant policy | `diagnose "chat does not work, network?"` | confirmed: Azure Policy `CosmosDB_PublicNetwork_Modify` (found with `az policy state list`) turned Cosmos public access off because the resource and its resource group lack the exemption tag the policy's own rule names (`SecurityControl=Ignore`, read from the policy definition). Non-WAF flavor, so it did not come from the template. Options: 📘 add the tag (for dev/test only, never run by the agent), 🔴 ask the policy owner for an exemption, 📘 deploy the WAF flavor instead |
 
 ## Extending to another accelerator
 

@@ -13,6 +13,7 @@ import json
 import re
 import shutil
 import subprocess
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -53,6 +54,7 @@ READ_ONLY_PREFIXES = [
     "search service show",
     "monitor activity-log list",
     "policy state list",
+    "policy definition show",
 ]
 
 ALLOWED_HTTP_HOST_SUFFIXES = (".azurewebsites.net", "localhost", "127.0.0.1")
@@ -120,6 +122,25 @@ class AzRunner:
         self.record_to = record_to
         self._recorded: Dict[str, Any] = {}
         self.history: List[CommandRecord] = []
+        self._local = threading.local()
+
+    def _log(self, rec: CommandRecord) -> None:
+        """Keep every command in the global history and in the capture list of the check running on this thread."""
+        self.history.append(rec)
+        cap = getattr(self._local, "capture", None)
+        if cap is not None:
+            cap.append(rec)
+
+    def begin_capture(self, into: Optional[List[CommandRecord]] = None) -> List[CommandRecord]:
+        """Start attributing this thread's commands to a check (``into`` lets helper threads join their parent)."""
+        self._local.capture = into if into is not None else []
+        return self._local.capture
+
+    def end_capture(self) -> None:
+        self._local.capture = None
+
+    def current_capture(self) -> Optional[List[CommandRecord]]:
+        return getattr(self._local, "capture", None)
 
     @property
     def available(self) -> bool:
@@ -132,7 +153,7 @@ class AzRunner:
         cmd_str = "az " + " ".join(args)
         if not self.available:
             rec = CommandRecord(cmd_str, None, _now(), 0, "Azure CLI not found on PATH", source="skipped")
-            self.history.append(rec)
+            self._log(rec)
             return False, {"error": "az-not-installed"}, rec
         start = time.time()
         try:
@@ -162,7 +183,7 @@ class AzRunner:
         # The excerpt is built from redacted data, never from raw stdout.
         excerpt_src = (json.dumps(data) if not isinstance(data, str) else data) if ok else ""
         rec = CommandRecord(cmd_str, code, _now(), dur, _excerpt(excerpt_src, err if not ok else ""), source="live")
-        self.history.append(rec)
+        self._log(rec)
         if self.record_to is not None:
             self._recorded[" ".join(args)] = {
                 "exit_code": code,
@@ -188,7 +209,7 @@ class AzRunner:
         dur = int((time.time() - start) * 1000)
         result = {"status": status, "body_excerpt": redact_text(body[:500]), "error": err, "latency_ms": dur}
         rec = CommandRecord(f"HTTP GET {url}", status, _now(), dur, _excerpt(body[:500], err), source="live")
-        self.history.append(rec)
+        self._log(rec)
         if self.record_to is not None:
             self._recorded[f"HTTP GET {url}"] = {"exit_code": status, "stdout": result, "stderr": err}
         return status is not None and 200 <= status < 400, result, rec
@@ -238,7 +259,7 @@ class ReplayRunner(AzRunner):
             rec = CommandRecord(
                 "az " + key, None, _now(), 0, "no fixture recorded for this command", source="replay-missing"
             )
-            self.history.append(rec)
+            self._log(rec)
             return False, {"error": "no-fixture"}, rec
         code = fx.get("exit_code", 0)
         ok = code == 0
@@ -247,7 +268,7 @@ class ReplayRunner(AzRunner):
         rec = CommandRecord(
             "az " + key, code, _now(), 0, _excerpt(text, "" if ok else fx.get("stderr", "")), source="replay"
         )
-        self.history.append(rec)
+        self._log(rec)
         return ok, data, rec
 
     def http_get(self, url: str, timeout: int = 20) -> Tuple[bool, Dict[str, Any], CommandRecord]:
@@ -258,7 +279,7 @@ class ReplayRunner(AzRunner):
         result = fx.get("stdout") or {}
         status = result.get("status")
         rec = CommandRecord(f"HTTP GET {url}", status, _now(), 0, json.dumps(result)[:500], source="replay")
-        self.history.append(rec)
+        self._log(rec)
         return status is not None and 200 <= status < 400, result, rec
 
 
@@ -275,7 +296,7 @@ class OfflineRunner(AzRunner):
         if not is_read_only(args):
             raise CommandNotAllowed(" ".join(args))
         rec = CommandRecord("az " + " ".join(args), None, _now(), 0, "offline mode: not executed", source="skipped")
-        self.history.append(rec)
+        self._log(rec)
         return False, {"error": "offline"}, rec
 
     def http_get(self, url, timeout=20):

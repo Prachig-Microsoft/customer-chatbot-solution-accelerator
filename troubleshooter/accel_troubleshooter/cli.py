@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 from . import actions as actions_mod
 from . import runcmd, telemetry
 from .azcli import AzRunner, CommandNotAllowed, OfflineRunner, ReplayRunner
-from .compact import render_compact
+from .compact import color_enabled, colorize, enable_windows_vt, render_compact
 from .diagnostics import CHECKS
 from .engine import Troubleshooter
 from .knowledge import coverage, freshness
@@ -92,6 +92,9 @@ def _emit(args, d: Dict[str, Any], kind: str = "diagnose", extra_md: str = "") -
         text = full
     else:
         text = render_compact(d, kind, plain=getattr(args, "plain", False))
+        if color_enabled(plain=getattr(args, "plain", False), force=getattr(args, "color_flag", None)):
+            enable_windows_vt()
+            text = colorize(text)
     print(text)
     if args.out:
         Path(args.out).write_text(full, encoding="utf-8")
@@ -526,7 +529,9 @@ def build_parser() -> argparse.ArgumentParser:
         )
         sp.add_argument("--out", help="Save the FULL report to this file (summary is still printed)")
         sp.add_argument("--verbose", action="store_true", help="Include raw check evidence in the full report")
-        sp.add_argument("--plain", action="store_true", help="ASCII status markers instead of emoji")
+        sp.add_argument("--plain", action="store_true", help="ASCII markers, no emoji and no colour")
+        sp.add_argument("--color", dest="color_flag", action="store_true", default=None, help="Force colour on")
+        sp.add_argument("--no-color", dest="color_flag", action="store_false", help="Never use colour")
         if live:
             sp.add_argument("--env", help="azd environment name (default: .azure/config.json defaultEnvironment)")
             sp.add_argument("--env-file", help="Read azd-style KEY=VALUE values from this file instead of .azure/")

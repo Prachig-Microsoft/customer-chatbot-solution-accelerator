@@ -8,7 +8,7 @@ from typing import Any, Dict
 from ..models import ERROR, FAIL, INFO, PASS, SKIP, CheckResult
 from ..repo import _parse_dotenv
 from .azure_checks import _error_code, _need_rg
-from .base import DiagContext, check
+from .base import DiagContext, check, parallel_map
 
 PLACEHOLDER = re.compile(r"populate manually", re.I)  # values arrive pre-redacted; "<redacted>" means set
 
@@ -62,15 +62,15 @@ def webapp_state(ctx: DiagContext) -> CheckResult:
     apps_out, placeholder_apps, stopped, missing_settings, pp_missing = [], [], [], {}, {}
     ctx.facts["app_principals"] = {}
     ctx.facts["app_settings_names"] = {}
-    for app in ctx.profile.get("apps", []):
+
+    def inspect(app):
+        """All Azure calls for one app (runs on a helper thread); returns plain data, merged below in order."""
         name = _app_name(ctx, app)
         if not name:
-            apps_out.append({"id": app["id"], "error": "app name unknown"})
-            continue
+            return {"row": {"id": app["id"], "error": "app name unknown"}}
         ok, data, _ = ctx.az("webapp", "show", "--resource-group", ctx.resource_group, "--name", name)
         if not ok:
-            apps_out.append({"id": app["id"], "name": name, "error": _error_code(data) or "not found"})
-            continue
+            return {"row": {"id": app["id"], "name": name, "error": _error_code(data) or "not found"}}
         fx = (data.get("siteConfig") or {}).get("linuxFxVersion") or ""
         image = fx.split("|", 1)[-1] if fx else ""
         is_placeholder = any(m in image for m in markers)
@@ -84,13 +84,13 @@ def webapp_state(ctx: DiagContext) -> CheckResult:
             "identity": (data.get("identity") or {}).get("type"),
             "https_only": data.get("httpsOnly"),
         }
-        pid = (data.get("identity") or {}).get("principalId")
-        if pid:
-            ctx.facts["app_principals"][app["id"]] = pid
-        if is_placeholder:
-            placeholder_apps.append(name)
-        if data.get("state") != "Running":
-            stopped.append(name)
+        res = {
+            "row": row,
+            "name": name,
+            "principal": (data.get("identity") or {}).get("principalId"),
+            "placeholder": is_placeholder,
+            "stopped": data.get("state") != "Running",
+        }
         if app.get("required_settings") or app.get("post_provision_settings"):
             ok, settings, _ = ctx.az(
                 "webapp", "config", "appsettings", "list", "--resource-group", ctx.resource_group, "--name", name
@@ -106,15 +106,29 @@ def webapp_state(ctx: DiagContext) -> CheckResult:
                     for s in settings or []
                     if isinstance(s, dict) and "name" in s
                 }
-                ctx.facts["app_settings_names"][app["id"]] = flags
-                miss = [k for k in app.get("required_settings", []) if flags.get(k) != "set"]
-                pp = [k for k in app.get("post_provision_settings", []) if flags.get(k) != "set"]
-                if miss:
-                    missing_settings[name] = miss
-                if pp:
-                    pp_missing[name] = pp
+                res["flags"] = flags
+                res["miss"] = [k for k in app.get("required_settings", []) if flags.get(k) != "set"]
+                res["pp"] = [k for k in app.get("post_provision_settings", []) if flags.get(k) != "set"]
                 row["settings_checked"] = len(flags)
-        apps_out.append(row)
+        return res
+
+    apps = ctx.profile.get("apps", [])
+    for app, res in zip(apps, parallel_map(ctx, inspect, apps)):
+        apps_out.append(res["row"])
+        if "name" not in res:
+            continue
+        if res.get("principal"):
+            ctx.facts["app_principals"][app["id"]] = res["principal"]
+        if res["placeholder"]:
+            placeholder_apps.append(res["name"])
+        if res["stopped"]:
+            stopped.append(res["name"])
+        if "flags" in res:
+            ctx.facts["app_settings_names"][app["id"]] = res["flags"]
+            if res["miss"]:
+                missing_settings[res["name"]] = res["miss"]
+            if res["pp"]:
+                pp_missing[res["name"]] = res["pp"]
     ctx.facts.update(
         placeholder_image_apps=placeholder_apps,
         stopped_apps=stopped,
@@ -158,29 +172,23 @@ def webapp_health(ctx: DiagContext) -> CheckResult:
     if ctx.rg_known_missing():
         return CheckResult("webapp.health", title, SKIP, "Resource group does not exist.")
     rows, failing = [], []
+    state = ctx.results.get("webapp.state")
+    hosts = {a.get("id"): a.get("host") for a in (state.evidence.get("apps", []) if state else []) if a.get("host")}
+    probes = []
     for app in ctx.profile.get("apps", []):
-        url = ctx.env.get(app.get("url_env"))
-        if not url:
-            host = (
-                next(
-                    (
-                        a.get("host")
-                        for a in ctx.results.get("webapp.state").evidence.get("apps", [])
-                        if a.get("id") == app["id"] and a.get("host")
-                    ),
-                    None,
-                )
-                if ctx.results.get("webapp.state")
-                else None
-            )
-            url = f"https://{host}" if host else ""
-        if not url:
-            continue
-        probe = url.rstrip("/") + app.get("health_path", "/")
-        ok, res, _ = ctx.runner.http_get(probe)
-        rows.append({"app": app["id"], "url": probe, **res})
+        url = ctx.env.get(app.get("url_env")) or (f"https://{hosts[app['id']]}" if hosts.get(app["id"]) else "")
+        if url:
+            probes.append((app, url.rstrip("/") + app.get("health_path", "/")))
+
+    def probe(item):
+        app, target = item
+        ok, res, _ = ctx.runner.http_get(target)
+        return app["id"], target, ok, res
+
+    for app_id, target, ok, res in parallel_map(ctx, probe, probes):
+        rows.append({"app": app_id, "url": target, **res})
         if not ok:
-            failing.append(app["id"])
+            failing.append(app_id)
     ctx.facts["health_failing"] = failing
     ctx.facts["health_results"] = rows
     if not rows:

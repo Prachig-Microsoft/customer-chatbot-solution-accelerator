@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -159,6 +160,7 @@ def rg_state(ctx: DiagContext) -> CheckResult:
     ctx.facts["rg_exists"] = True
     state = (data.get("properties") or {}).get("provisioningState")
     ctx.facts["rg_location"] = data.get("location")
+    ctx.facts["rg_tags"] = data.get("tags") or {}
     ev = {
         "resource_group": rg,
         "location": data.get("location"),
@@ -645,6 +647,29 @@ def ai_deployments(ctx: DiagContext) -> CheckResult:
     return CheckResult("ai.deployments", title, status, summary, evidence={"account": acct, "deployments": deps})
 
 
+def _exempt_tag(definition: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    """The tag (name/value) that makes a policy skip a resource, read from the policy's own rule + parameters."""
+    rule_text = json.dumps(definition.get("policyRule") or {})
+    params = definition.get("parameters") or {}
+
+    def default(name: str) -> str:
+        return str((params.get(name) or {}).get("defaultValue") or "")
+
+    names = re.findall(r"parameters\('(\w*Tag\w*Name\w*)'\)", rule_text)
+    values = re.findall(r"parameters\('(\w*Tag\w*Value\w*)'\)", rule_text)
+    if names and values:
+        return {
+            "name": default(names[0]),
+            "value": default(values[0]),
+            "scope": "the resource or its resource group" if "resourceGroup().tags" in rule_text else "the resource",
+            "source": "policy definition default parameters",
+        }
+    literal = re.search(r"tags\[([A-Za-z0-9_.-]+)\]", rule_text)
+    return (
+        {"name": literal.group(1), "value": "", "scope": "the resource", "source": "policy rule"} if literal else None
+    )
+
+
 def _enforcing_policies(ctx: DiagContext, resource_id: str) -> List[Dict[str, Any]]:
     """Azure Policy modify/deny/deployIfNotExists assignments that actively change or block this resource."""
     ok, states, _ = ctx.az("policy", "state", "list", "--resource", resource_id)
@@ -660,14 +685,23 @@ def _enforcing_policies(ctx: DiagContext, resource_id: str) -> List[Dict[str, An
             continue
         seen.add(key)
         scope = s.get("policyAssignmentScope") or ""
-        out.append(
-            {
-                "action": action,
-                "assignment": s.get("policyAssignmentName"),
-                "definition": s.get("policyDefinitionName"),
-                "scope_level": "management group" if "managementGroups" in scope else "subscription/resource group",
-            }
-        )
+        entry = {
+            "action": action,
+            "assignment": s.get("policyAssignmentName"),
+            "definition": s.get("policyDefinitionName"),
+            "scope_level": "management group" if "managementGroups" in scope else "subscription/resource group",
+        }
+        args = ["policy", "definition", "show", "--name", str(s.get("policyDefinitionName"))]
+        mg = re.search(r"managementGroups/([A-Za-z0-9._-]+)", scope)
+        if mg:
+            args += ["--management-group", mg.group(1)]
+        ok, definition, _ = ctx.az(*args)
+        if ok and isinstance(definition, dict):
+            entry["display_name"] = definition.get("displayName")
+            entry["exempt_tag"] = _exempt_tag(definition)
+            # Which setting does this policy rewrite? (a local-auth policy must not be blamed for network access)
+            entry["public_access"] = "publicnetworkaccess" in json.dumps(definition.get("policyRule") or {}).lower()
+        out.append(entry)
     return out
 
 
@@ -719,12 +753,15 @@ def network_access(ctx: DiagContext) -> CheckResult:
                 "publicNetworkAccess": pna,
                 "networkAclsDefault": acl,
                 "disableLocalAuth": props.get("disableLocalAuth"),
+                "tags": data.get("tags") or {},
             }
         )
         if (pna or "").lower() == "disabled" or (acl or "").lower() == "deny":
             disabled.append(r["name"])
+            ctx.facts.setdefault("resource_tags", {})[r["name"]] = data.get("tags") or {}
             if data.get("id"):
                 policy_enforcers[r["name"]] = _enforcing_policies(ctx, data["id"])
+                ctx.facts.setdefault("resource_ids", {})[r["name"]] = data["id"]
     ctx.facts["public_access_disabled"] = disabled
     ctx.facts["has_private_endpoints"] = has_pe
     ctx.facts["policy_enforcers"] = policy_enforcers
