@@ -108,6 +108,16 @@ def render_preflight(d: Dict[str, Any], plain: bool = False) -> str:
     sub = (_check(d, "az.context") or {}).get("evidence", {}).get("subscription_name") or "?"
     blocking = [c for c in d["checks"] if c["status"] in ("fail", "error")]
     rec = _recommend_region(d)
+    quota = _check(d, "quota.models")
+    checked = quota is not None and quota["status"] in ("pass", "fail", "warn", "info")
+    if not blocking and not checked:
+        why_not = (quota or {}).get("summary") if quota and quota["status"] == "skip" else None
+        why_not = why_not or (d.get("limitations") or [None])[0] or "no live checks ran"
+        verdict = "NOT CHECKED" if plain else "❔ NOT CHECKED"
+        out = [f"PREFLIGHT: {verdict}      {a.get('id', '?')} · {d['mode']} mode", ""]
+        out += [f"Why               {_t(why_not, 110)}", ""]
+        out.append("Next              fix that, then run preflight again (a GO needs the live quota check to run)")
+        return "\n".join(out)
     verdict = ("NO-GO" if plain else "🛑 NO-GO") if blocking else ("GO" if plain else "✅ GO")
     out = [f"PREFLIGHT: {verdict}      {a.get('id', '?')} · subscription {sub} · {d['duration_ms'] / 1000:.0f}s", ""]
 

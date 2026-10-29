@@ -185,6 +185,23 @@ Fixtures in `evals/fixtures/`:
 Each diagnosis is appended to `.runs/runs.jsonl` (accelerator, stage, codes, per-check status/duration/commands, top
 hypothesis, cited docs). `python -m accel_troubleshooter stats` aggregates it.
 
+## Using it in another accelerator
+
+The folder is self-contained and has no dependencies beyond Python 3.10+ and the Azure CLI.
+
+1. Copy `troubleshooter/` to the root of the other accelerator repo (Content Processing, Chat With Your Data, or the
+   chatbot). Optionally also copy `.github/agents/accelerator-troubleshooter.agent.md` and `.vscode/mcp.json`
+   (it starts `python troubleshooter/mcp_launcher.py`, so it works from any location).
+2. Run `cd troubleshooter` then `python -m accel_troubleshooter preflight`. The accelerator is recognised from
+   `azure.yaml`, the git remote and marker files, and the repo in the current workspace is always tried first, whatever
+   the folder is called.
+3. What you get depends on the profile in `accel_troubleshooter/profiles/` (see the table above): the three shipped
+   profiles work immediately. A **new** accelerator needs a profile file first (section "Extending to another
+   accelerator"). Without a matching profile it asks which accelerator you mean instead of guessing.
+
+`preflight` prints **NOT CHECKED** (exit code 3), never GO, when no live quota check could run (offline, not logged
+in, or the repo could not be found).
+
 ## Extending to another accelerator
 
 1. Add `accel_troubleshooter/profiles/<id>.json`, copying an existing profile. Fill in the fingerprint, docs per

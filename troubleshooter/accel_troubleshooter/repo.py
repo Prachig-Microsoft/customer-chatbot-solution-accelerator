@@ -32,7 +32,8 @@ def resolve_repo(profile: Dict[str, Any], workspace: Path, explicit: Optional[st
     if explicit:
         p = Path(explicit).resolve()
         return p if p.exists() else None
-    for cand in profile.get("repo_candidates", []):
+    # The workspace itself comes first for every accelerator: copy this folder into any accelerator repo and it works.
+    for cand in [".", *profile.get("repo_candidates", [])]:
         p = (workspace / cand).resolve()
         if p.exists() and fingerprint_score(profile, p)[0] >= 2:
             return p

@@ -223,15 +223,15 @@ def cmd_preflight(args) -> int:
         ],
     )
     blocking = [c for c in diag.checks if c.status in ("fail", "error")]
-    verdict = (
-        "## Preflight verdict: "
-        + ("🛑 NO-GO" if blocking else "✅ GO")
-        + "\n"
-        + "\n".join(f"- `{c.check_id}`: {c.summary}" for c in blocking)
-    )
+    quota = next((c for c in diag.checks if c.check_id == "quota.models"), None)
+    checked = quota is not None and quota.status in ("pass", "fail", "warn", "info")
+    label = "🛑 NO-GO" if blocking else ("✅ GO" if checked else "❔ NOT CHECKED")
+    verdict = "## Preflight verdict: " + label + "\n" + "\n".join(f"- `{c.check_id}`: {c.summary}" for c in blocking)
     _emit(args, diag.to_dict(), "preflight", extra_md=verdict + "\n\n" + _quota_md(diag))
     _finish(ts, diag)
-    return EXIT_FINDINGS if blocking else EXIT_OK
+    if blocking:
+        return EXIT_FINDINGS
+    return EXIT_OK if checked else EXIT_ERROR
 
 
 def cmd_compare(args) -> int:
