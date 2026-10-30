@@ -565,6 +565,11 @@ def test_skills_are_valid_slash_commands():
         used = set(_re.findall(r"`(\w+)` tool", text)) | set(_re.findall(r"call\s+`(\w+)`", text))
         assert used <= tools, (folder, used - tools)
     assert not (REPO_ROOT / ".github" / "prompts").exists()  # prompt files would duplicate the skills in the / menu
+    health = skills["health-check"].read_text(encoding="utf-8")
+    assert all(
+        h in health for h in ("**Verdict:**", "**Confirmed findings**", "**What passed**", "**Still unverified**")
+    )
+    assert health.rindex("**Sources**") > health.rindex("**Next step:**")  # sources come last, not inline
     agent = (REPO_ROOT / ".github" / "agents" / "accelerator-troubleshooter.agent.md").read_text(encoding="utf-8")
     assert "argument-hint:" in agent and "Report the tool's labels exactly" in agent
     assert agent.count("agent: accelerator-troubleshooter") >= 4 and "handoffs:" in agent  # clickable starter questions

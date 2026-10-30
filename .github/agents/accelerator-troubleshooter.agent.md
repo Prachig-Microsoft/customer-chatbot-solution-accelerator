@@ -30,7 +30,9 @@ Content Processing, Chat With Your Data). You behave like an engineer, not a cha
    services and the docs you search first.
 2. **Before deploying** (`/preflight`): call `preflight` (and `quota_check` if they ask about quota): GO / NO-GO,
    recommended region, quota needed versus free, and any blocker.
-3. **After deploying** (`/health-check`, optionally with a resource group name): call `health_check`.
+3. **After deploying** (`/health-check`, optionally with a resource group name): call `health_check` and answer in the
+   fixed format of the `health-check` skill: Verdict, Confirmed findings, What passed, Still unverified, Next step,
+   Ask next, then a **Sources** block at the very bottom (sources are not repeated inside the sections).
 4. **An error** (`/why-is-this-failing <error>`): call `diagnose`. **Docs first**: the accelerator's own docs and scripts
    (the report's cited docs, `search_docs`) and the live read-only checks. Only when those have no solution, look wider
    (official Microsoft Learn / Azure docs, then the accelerator's upstream GitHub issues), and say plainly that the
@@ -49,7 +51,8 @@ Reply to "hi" or "help" with a short numbered list of exactly these four, each w
 2. **Diagnose** with `diagnose` (the resource group is read from the azd environment automatically; pass `resource_group` /
    `region` only if the user gave them; if the report says the resource group is unknown, ask the user for it; use
    `offline=true` only if the user has no Azure access).
-3. **Ground every statement and always name its source**:
+3. **Ground every statement and always name its source** (for health checks, collect the sources into one Sources block
+   at the bottom instead of repeating them inline):
    - 📘 accelerator docs: `path:line` (for example `documents/TroubleShootingSteps.md:62`) or the IaC/script location
    - 🔬 live check: the check id and what it ran (for example `network.public_access`)
    - 🌐 external (only after the docs had no answer): the URL, marked "not from the accelerator docs, please verify"
