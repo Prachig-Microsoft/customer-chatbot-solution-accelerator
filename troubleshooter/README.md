@@ -164,8 +164,12 @@ supports. The docs and Bicep are only used for what the deployment *needs* and f
 Every report prints its source ("live 'az cognitiveservices usage list' in N region(s), subscription …; need from
 infra/main.bicep:98 default").
 
-1. **Requirements:** model, SKU and capacity per deployment, resolved with the precedence what-if override → azd env var →
-   azd `config.json` parameter → Bicep default, each with its source line.
+1. **Requirements (what the deployment needs):** model, SKU and capacity per deployment, read from your repo **on every
+   run** (nothing is cached), using the same order azd uses, highest first: what-if override (`--capacity`) → azd env
+   variable (e.g. `AZURE_ENV_GPT_MODEL_CAPACITY`) → `.azure/<env>/config.json` parameter → a value or `${VAR=default}`
+   written in `infra/main.parameters.json` → the default in `infra/main.bicep`. So if you edit the parameter file, the
+   Bicep file or the azd env, the next run uses it, and each number is printed with the file and line (or env variable)
+   it came from.
 2. **Live quota:** `az cognitiveservices usage list` for the target region. If that region is short, all regions the
    template allows (`@allowed` on the AI location parameter) are checked too.
 3. **Availability:** model name, version and deployment type, plus retirement date (`az cognitiveservices model list`).
@@ -181,24 +185,26 @@ infra/main.bicep:98 default").
 `.vscode/mcp.json` registers the stdio server `accelerator-troubleshooter`
 (`python troubleshooter/mcp_launcher.py`, with no `cwd` or `${workspaceFolder}` so it starts from any host; requires
 `pip install -r troubleshooter/requirements-mcp.txt`). Its tools are
-`identify_accelerator`, `search_docs`, `health_check`, `diagnose`, `quota_check`, `preflight` and `list_checks` (all
-read-only) plus **`apply_fix`**, the one gated write tool: it refuses unless the user approved that exact change and only
-runs allow-listed actions. Every tool runs the same CLI in a fresh process, so **chat and terminal always give the same findings**.
-In VS Code, pick the **accelerator-troubleshooter** custom agent in Copilot Chat and describe the problem, or type `/`
-and use a ready-made question (skills in `.github/skills/`; type the command, then your text, e.g.
-`/check-resource-group rg-name`):
+`identify_accelerator`, `about_accelerator`, `search_docs`, `health_check`, `diagnose`, `quota_check`, `preflight` and
+`list_checks` (all read-only) plus **`apply_fix`**, the one gated write tool: it refuses unless the user approved that
+exact change and only runs allow-listed actions. Every tool runs the same CLI in a fresh process, so **chat and terminal
+always give the same findings**. In VS Code, pick the **accelerator-troubleshooter** custom agent in Copilot Chat and
+say hi, or type `/` and use one of the four ready-made questions (skills in `.github/skills/`; type the command, then
+your text):
 
-| Slash command | Asks the agent to |
-|---|---|
-| `/health-check` | check the deployed solution (current azd env, or `rg-name` if you give one) |
-| `/check-resource-group` | check any resource group by name |
-| `/preflight` | GO / NO-GO and recommended region before `azd up` |
-| `/why-is-this-failing` | diagnose a pasted error or symptom |
-| `/quota-check` | model quota vs required capacity |
-| `/search-the-docs` | search the accelerator docs and troubleshooting guide |
+| Slash command | When | What you get |
+|---|---|---|
+| `/about-accelerator` | first | accelerator name, 2-3 lines from its README (with file:line), Azure services, docs searched first |
+| `/preflight` | before `azd up` | GO / NO-GO, recommended region, quota needed vs free (live from your subscription), blockers |
+| `/health-check [rg-name]` | after `azd up` | health of the current azd env, or of any resource group you name |
+| `/why-is-this-failing <error>` | on an error | the accelerator's docs first, then live checks, then (only if no solution) wider sources; every statement names its source (📘 docs path:line, 🔬 live check id, 🌐 external URL) |
 
-After you update the troubleshooter code, restart the MCP server once (Command Palette → **MCP: List Servers** →
-`accelerator-troubleshooter` → **Restart**) so chat does not keep running an older copy.
+The terminal equivalents are `about`, `preflight`, `health` and `diagnose`. When `diagnose` finds no documented cause it
+ends with "NOT IN THE ACCELERATOR DOCS?" and links to a GitHub-issues search and Microsoft Learn, labelled as external.
+
+After you update the troubleshooter code, restart the MCP server once so chat does not keep running an older copy
+(Command Palette → **MCP: List Servers** → `accelerator-troubleshooter` → **Stop Server**, then Start; it only starts
+once a chat session exists, so send one message first), then run **Developer: Reload Window**.
 
 ## Knowledge index
 
@@ -232,7 +238,7 @@ hypothesis, cited docs). `python -m accel_troubleshooter stats` aggregates it.
 ## Using it in another accelerator
 
 The tool needs only Python 3.10+ and the Azure CLI. One command copies everything (the tool, the Copilot agent, the
-six starter-question skills and the MCP entry) and tells you whether the target repo is recognised:
+four starter-question skills and the MCP entry) and tells you whether the target repo is recognised:
 
 ```powershell
 # from this repo's troubleshooter folder; add --dry-run first to preview, --force to update an existing install
@@ -249,7 +255,7 @@ Then, in the other repository:
    keeps `.runs/` and `.cache/` out).
 
 What it copies: `troubleshooter/` (runtime only; add `--full` for tests, evals and the demo script),
-`.github/agents/accelerator-troubleshooter.agent.md`, `.github/skills/<6 skills>/SKILL.md`, and the
+`.github/agents/accelerator-troubleshooter.agent.md`, `.github/skills/<4 skills>/SKILL.md`, and the
 `accelerator-troubleshooter` server merged into `.vscode/mcp.json` (other servers are kept; a file with comments is left
 alone and the snippet is printed). Existing files are never overwritten without `--force`.
 

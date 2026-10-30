@@ -91,7 +91,14 @@ def test_mcp_server_lists_read_only_tools():
         if "text" not in result or "BrokenResource" not in repr(exc):
             raise
     tools, text = result["tools"], result["text"]
-    assert {"identify_accelerator", "search_docs", "health_check", "diagnose", "quota_check", "preflight"} <= tools
+    assert {
+        "identify_accelerator",
+        "about_accelerator",
+        "health_check",
+        "diagnose",
+        "quota_check",
+        "preflight",
+    } <= tools
     assert {t for t in tools if "fix" in t or "execute" in t} == {"apply_fix"}  # the single, gated write tool
     assert "chat-with-your-data" in text
 

@@ -579,6 +579,21 @@ def cmd_eval(args) -> int:
     return EXIT_OK if result["passed"] == result["total"] else EXIT_FINDINGS
 
 
+def cmd_about(args) -> int:
+    """What is this accelerator? Name, short description from its README, services, docs and repo."""
+    from .about import build_about, render_about
+
+    ts = _ts(args)
+    ident = ts.identify("", args.accelerator)
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if not ident["confident"]:
+        print(ident["question"])
+        return EXIT_CLARIFY
+    info = build_about(ts, ident["accelerator"], ts.repo_for(ident["accelerator"]))
+    print(json.dumps(info, indent=2) if args.format == "json" else render_about(info, plain=args.plain))
+    return EXIT_OK
+
+
 def cmd_install(args) -> int:
     """Copy the troubleshooter, agent, skills and MCP entry into another accelerator repository."""
     from . import install as install_mod
@@ -747,6 +762,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     st = sub.add_parser("stats", help="Operational statistics from the run log")
     st.set_defaults(func=cmd_stats)
+
+    ab = sub.add_parser("about", help="What is this accelerator? Short description from its README, services, docs")
+    common(ab, live=False)
+    ab.set_defaults(func=cmd_about)
 
     ins = sub.add_parser(
         "install", help="Copy the troubleshooter, agent, skills and MCP entry into another accelerator repository"

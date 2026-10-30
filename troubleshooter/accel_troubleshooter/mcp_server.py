@@ -93,6 +93,14 @@ def search_docs(query: str, accelerator: Optional[str] = None, k: int = 5) -> st
 
 
 @mcp.tool()
+def about_accelerator(accelerator: Optional[str] = None) -> str:
+    """Tell the user what the accelerator in this workspace is: its name, a 2-3 sentence description taken from its own
+    README (with file and line), Azure services, deployment flavors, the docs searched first, and the source repo.
+    Use for "what is this?", "about this accelerator", or when the user says hi and has not asked anything yet."""
+    return _cli(["about"] + (["--accelerator", accelerator] if accelerator else []), timeout=120)
+
+
+@mcp.tool()
 def health_check(
     resource_group: Optional[str] = None,
     accelerator: Optional[str] = None,

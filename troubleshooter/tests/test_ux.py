@@ -543,15 +543,10 @@ def test_skills_are_valid_slash_commands():
     import re as _re
 
     skills = {p.parent.name: p for p in (REPO_ROOT / ".github" / "skills").glob("*/SKILL.md")}
-    assert set(skills) >= {
-        "health-check",
-        "preflight",
-        "why-is-this-failing",
-        "check-resource-group",
-        "quota-check",
-        "search-the-docs",
-    }
+    # exactly the four questions users ask: what is this, before deploying, after deploying, an error
+    assert set(skills) == {"about-accelerator", "preflight", "health-check", "why-is-this-failing"}
     tools = {
+        "about_accelerator",
         "health_check",
         "diagnose",
         "preflight",

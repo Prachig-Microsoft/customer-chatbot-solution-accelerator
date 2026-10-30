@@ -40,16 +40,21 @@ def effective_model_requirements(ctx: DiagContext) -> List[Dict[str, Any]]:
         overrides = ctx.overrides.get("capacity_overrides", {})
         if pname in overrides:
             return overrides[pname], "what-if override"
-        envvar = (env_map.get(pname) or {}).get("env")
+        entry = env_map.get(pname) or {}
+        envvar = entry.get("env")
         if envvar and ctx.env.get(envvar):
             return ctx.env.get(envvar), f"azd env {envvar}"
         if pname in ctx.env.params:
             return ctx.env.params[pname], f"azd env config.json infra.parameters.{pname}"
+        # azd substitutes the parameters file into the deployment, so a value written there beats the Bicep default.
+        if entry.get("default"):
+            return entry["default"], f"{iac['parameters']} default of ${{{envvar}}}"
+        if entry.get("literal") not in (None, ""):
+            return entry["literal"], f"{iac['parameters']} value"
         p = params.get(pname)
         if p is not None and p.default is not None:
             return p.default, f"{iac['main']}:{p.line} default"
-        envdef = (env_map.get(pname) or {}).get("default")
-        return envdef, f"{iac['parameters']} default" if envdef else "unset"
+        return None, "unset"
 
     reqs = []
     for m in iac.get("models", []):

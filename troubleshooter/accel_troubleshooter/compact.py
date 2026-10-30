@@ -10,6 +10,7 @@ import os
 import re
 import sys
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote_plus
 
 from .actions import EXECUTABLE_ACTIONS
 from .models import APPROVAL_REQUIRED, MANUAL, READ_ONLY, RESTRICTED
@@ -372,6 +373,21 @@ def render_compact(d: Dict[str, Any], kind: str = "diagnose", plain: bool = Fals
             out.append("  ▸ To apply a 🟡 action: fix <action-id> --approve   (you confirm; then it re-checks)")
 
     missing = d.get("missing_evidence", [])
+    if kind == "diagnose" and not (top and top["status"] in ("confirmed", "likely")):
+        issue = d.get("issue") or {}
+        raw = str(issue.get("raw_text") or "")
+        terms = (issue.get("error_codes") or [None])[0] or (
+            " ".join(raw.split()[:8]) if len(raw.split()) > 3 and not raw.lower().startswith("check my") else ""
+        )
+        if terms and a.get("upstream"):
+            q = quote_plus(terms)
+            out += [
+                "",
+                "NOT IN THE ACCELERATOR DOCS?",
+                "  • No confirmed cause from the docs or the live checks. Wider search (external, please verify):",
+                f"      {a['upstream']}/issues?q={q}",
+                f"      https://learn.microsoft.com/search/?terms={q}",
+            ]
     if missing and kind != "preflight":
         out += ["", "STILL NEEDED"]
         out += [f"  • {_t(m, 120)}" for m in missing[:4]]
