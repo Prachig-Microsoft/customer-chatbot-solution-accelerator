@@ -146,9 +146,23 @@ The az runner rejects any command not on the read-only allow-list and any argume
 name and value pattern. Any `{"name", "value"}` pair (App Service settings) has its value replaced at the runner layer,
 so reports, excerpts and recordings only show set/empty/placeholder state. Git diff evidence hides `.env` values and
 secret-named keys. Recorded fixtures are anonymized (subscription/tenant ids, UPNs, tenant names). The MCP server
-exposes no execution tool.
+exposes one write tool, `apply_fix`, which refuses without explicit user approval (see Copilot / MCP).
+
+**Policy exemption tag (`apply-exemption-tag`)** is applied in stages because Azure applies tags and network changes
+asynchronously: (1) tag the resource group and the Cosmos DB account, (2) poll `az tag list` until the tag is visible
+everywhere and `az cosmosdb show` says the account is no longer *Updating*, plus a 30 s settle pause, (3) enable public
+access (retrying a "busy" account up to 3 times, 60 s apart), (4) poll until it reports *Enabled*, wait 45 s and check
+the policy did not revert it, then (5) re-run the health check. It stops at the first step that fails or times out and
+prints a short numbered "what to do now" list; every step is safe to repeat. Expect 5-15 minutes.
 
 ## Quota workflow (end to end)
+
+The quota numbers come **live from your Azure subscription**, not from the docs: for every region checked the tool runs
+`az cognitiveservices usage list --location <region>` (used / limit per model and deployment type, as Azure reports it
+for the signed-in subscription), and `az cognitiveservices model list --location <region>` for what the region
+supports. The docs and Bicep are only used for what the deployment *needs* and for which regions the template allows.
+Every report prints its source ("live 'az cognitiveservices usage list' in N region(s), subscription …; need from
+infra/main.bicep:98 default").
 
 1. **Requirements:** model, SKU and capacity per deployment, resolved with the precedence what-if override → azd env var →
    azd `config.json` parameter → Bicep default, each with its source line.
@@ -217,17 +231,35 @@ hypothesis, cited docs). `python -m accel_troubleshooter stats` aggregates it.
 
 ## Using it in another accelerator
 
-The folder is self-contained and has no dependencies beyond Python 3.10+ and the Azure CLI.
+The tool needs only Python 3.10+ and the Azure CLI. One command copies everything (the tool, the Copilot agent, the
+six starter-question skills and the MCP entry) and tells you whether the target repo is recognised:
 
-1. Copy `troubleshooter/` to the root of the other accelerator repo (Content Processing, Chat With Your Data, or the
-   chatbot). Optionally also copy `.github/agents/accelerator-troubleshooter.agent.md` and `.vscode/mcp.json`
-   (it starts `python troubleshooter/mcp_launcher.py`, so it works from any location).
-2. Run `cd troubleshooter` then `python -m accel_troubleshooter preflight`. The accelerator is recognised from
-   `azure.yaml`, the git remote and marker files, and the repo in the current workspace is always tried first, whatever
-   the folder is called.
-3. What you get depends on the profile in `accel_troubleshooter/profiles/` (see the table above): the three shipped
-   profiles work immediately. A **new** accelerator needs a profile file first (section "Extending to another
-   accelerator"). Without a matching profile it asks which accelerator you mean instead of guessing.
+```powershell
+# from this repo's troubleshooter folder; add --dry-run first to preview, --force to update an existing install
+python -m accel_troubleshooter install C:\Repo\content-processing-solution-accelerator
+```
+
+Then, in the other repository:
+
+1. `pip install -r troubleshooter/requirements-mcp.txt` (once; only needed for chat, not for the terminal).
+2. Terminal: `cd troubleshooter` then `python -m accel_troubleshooter preflight` (or `health`).
+3. Chat: VS Code → **Developer: Reload Window** → new chat → pick **accelerator-troubleshooter** → send any message
+   (the MCP server only starts once a chat session exists) → say "hi" for the starter questions.
+4. Commit `.github/agents/`, `.github/skills/`, `.vscode/mcp.json` and `troubleshooter/` (the tool's own `.gitignore`
+   keeps `.runs/` and `.cache/` out).
+
+What it copies: `troubleshooter/` (runtime only; add `--full` for tests, evals and the demo script),
+`.github/agents/accelerator-troubleshooter.agent.md`, `.github/skills/<6 skills>/SKILL.md`, and the
+`accelerator-troubleshooter` server merged into `.vscode/mcp.json` (other servers are kept; a file with comments is left
+alone and the snippet is printed). Existing files are never overwritten without `--force`.
+
+The accelerator is recognised from `azure.yaml`, the git remote and marker files, and the repo in the current workspace
+is always tried first, whatever the folder is called. The three shipped profiles (Customer Chatbot, Content Processing,
+Chat With Your Data) work immediately. A **new** accelerator needs a profile file first
+(`accel_troubleshooter/profiles/<id>.json`; see "Extending to another accelerator"); without one the tool asks which
+accelerator you mean instead of guessing.
+
+Manual alternative: copy the `troubleshooter/` folder and the files above by hand.
 
 `preflight` prints **NOT CHECKED** (exit code 3), never GO, when no live quota check could run (offline, not logged
 in, or the repo could not be found).

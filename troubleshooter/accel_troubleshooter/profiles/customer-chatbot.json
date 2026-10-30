@@ -37,6 +37,7 @@
     "quota_scripts": ["infra/scripts/pre-provision/checkquota.sh", "infra/scripts/pre-provision/quota_check_params.sh"],
     "quota_doc": "documents/QuotaCheck.md"
   },
+  "policy_exemption_tag": {"name": "SecurityControl", "value": "Ignore"},
   "azd_env_keys": {
     "subscription": "AZURE_SUBSCRIPTION_ID",
     "resource_group": "AZURE_RESOURCE_GROUP",

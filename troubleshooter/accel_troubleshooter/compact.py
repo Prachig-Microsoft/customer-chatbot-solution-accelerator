@@ -30,6 +30,7 @@ SHORT = {
     "repo.azd_env": "azd environment",
     "repo.config_drift": "config consistency",
     "repo.git_changes": "uncommitted config",
+    "repo.exemption_tag": "policy tag in template",
     "az.context": "Azure login / subscription",
     "providers.registration": "resource providers",
     "rg.state": "resource group",
@@ -231,7 +232,7 @@ def render_preflight(d: Dict[str, Any], plain: bool = False) -> str:
     rows = (qev.get("regions") or {}).get(region or "", {}).get("models", []) if region else []
     if rows:
         parts = [f"{r['model']} need {r['capacity']} / free {r['available']}{'' if r['ok'] else ' ❌'}" for r in rows]
-        out.append("  ▸ Quota (K TPM): " + " · ".join(parts))
+        out.append("  ▸ Quota (K TPM, live from Azure): " + " · ".join(parts))
     if rec["others"]:
         out.append(f"  ▸ Other OK regions: {', '.join(rec['others'])}")
 
@@ -258,6 +259,14 @@ def render_preflight(d: Dict[str, Any], plain: bool = False) -> str:
     if notes:
         first = _t(notes[0].get("short") or notes[0]["message"], 80)
         out.append(f"  • Heads-up (not blocking): {len(notes)} doc/script note(s), e.g. {first}")
+    tagc = _check(d, "repo.exemption_tag")
+    if tagc and tagc["status"] == "info":
+        ev = tagc.get("evidence") or {}
+        out.append(
+            f"  • Reminder: tag {ev.get('tag')} is not in {ev.get('template_ref')}. If your tenant policy turns Cosmos "
+            "DB public access off, add it before azd up:"
+        )
+        out.append(f"      {ev.get('snippet')}")
 
     steps: List[str] = []
     if not blocking and region:
@@ -320,9 +329,16 @@ def render_compact(d: Dict[str, Any], kind: str = "diagnose", plain: bool = Fals
     if qc and (qc.get("evidence") or {}).get("regions") and kind in ("preflight", "quota", "diagnose"):
         lines = _quota_lines(qc, plain)
         if lines:
-            out += ["", "QUOTA (K tokens/min)"] + lines
+            n_regions = len((qc["evidence"] or {}).get("regions") or {})
+            out += ["", "QUOTA (K tokens/min, live from Azure)"] + lines
             if cands:
                 out.append(f"  ▸ Usable AI regions: {', '.join(cands)}")
+            srcs = sorted({r["capacity_source"] for r in qc["evidence"].get("requirements", [])})
+            out.append(
+                f"  ▸ Source: live 'az cognitiveservices usage list' in {n_regions} region(s)"
+                + (f", subscription {sub}" if sub else "")
+                + f"; need from {', '.join(srcs[:3])}"
+            )
 
     findings = [h for h in d["hypotheses"] if h["status"] in ("confirmed", "likely", "possible")][:max_findings]
     if findings and kind != "preflight":

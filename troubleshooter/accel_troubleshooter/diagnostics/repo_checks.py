@@ -5,9 +5,16 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List
 
-from ..models import FAIL, INFO, PASS, WARN, CheckResult
+from ..models import FAIL, INFO, PASS, SKIP, WARN, CheckResult
 from ..redact import is_secret_name, redact_text
-from ..repo import git_changed_files, git_diff_lines, parse_bicep_params, parse_parameters_env_map, parse_usage_names
+from ..repo import (
+    git_changed_files,
+    git_diff_lines,
+    parse_bicep_params,
+    parse_parameters_env_map,
+    parse_usage_names,
+    template_sets_tag,
+)
 from .base import DiagContext, check
 
 PLACEHOLDER = re.compile(r"^<.*>$|populate manually", re.I)
@@ -179,6 +186,42 @@ def _doc_default_models(text: str) -> Dict[str, int]:
 def _doc_default_regions(text: str) -> List[str]:
     m = re.search(r"Default Regions[^\n]*\n+```[^\n]*\n([^`]+)```", text, re.I)
     return [r.strip() for r in m.group(1).split(",") if r.strip()] if m else []
+
+
+@check(
+    "repo.exemption_tag",
+    "Policy exemption tag set in the template",
+    stages=["pre-deployment", "deployment", "networking"],
+    needs_azure=False,
+    order=3,
+)
+def exemption_tag(ctx: DiagContext) -> CheckResult:
+    title = "Policy exemption tag set in the template"
+    spec = ctx.profile.get("policy_exemption_tag")
+    if not spec:
+        return CheckResult("repo.exemption_tag", title, SKIP, "This accelerator's profile defines no exemption tag.")
+    name, value = spec["name"], spec.get("value", "")
+    tag = f"{name}={value}" if value else name
+    main = ctx.profile.get("iac", {}).get("main", "infra/main.bicep")
+    param_text = ""
+    params_file = ctx.repo / ctx.profile.get("iac", {}).get("parameters", "infra/main.parameters.json")
+    if params_file.exists():
+        param_text = params_file.read_text(encoding="utf-8", errors="ignore")
+    configured = name.lower() in (param_text + str(ctx.env.params)).lower()
+    if template_sets_tag(ctx.repo, main, name) or configured:
+        return CheckResult("repo.exemption_tag", title, PASS, f"Tag {tag} is set for new deployments.")
+    ref = ctx.doc_ref(main, r"^param tags ")
+    snippet = f"param tags object = {{ {name}: '{value}' }}"
+    return CheckResult(
+        "repo.exemption_tag",
+        title,
+        INFO,
+        f"Reminder: {tag} is not set in {ref}. Only needed if your tenant has an Azure Policy that turns Cosmos DB "
+        "public access off for untagged resources: then the app and post-deployment scripts cannot reach Cosmos DB "
+        f"after azd up. If that applies, set {snippet} there before deploying (dev/test only).",
+        evidence={"tag": tag, "template_ref": ref, "snippet": snippet},
+        doc_refs=[ctx.ref("deployment", "tenants may have additional security")],
+    )
 
 
 @check("repo.config_drift", "IaC vs docs vs scripts vs azd env consistency", stages=["*"], needs_azure=False, order=2)

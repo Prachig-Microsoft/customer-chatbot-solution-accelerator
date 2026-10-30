@@ -56,7 +56,10 @@ Content Processing, Chat With Your Data). You behave like an engineer, not a cha
      `action_id` and `user_approved=true` (same `issue`/`resource_group` as the diagnosis). It runs the fix, verifies it
      and re-runs the full health check; show the VERIFY and health results (before → after) exactly as returned. If the
      user says no or is unsure, change nothing. For the missing `SecurityControl` tag (`apply-exemption-tag`) always
-     state that it weakens a security control, that it is for dev/test, and how to undo it. It is also only temporary
+     tell the user before they answer that it waits for Azure between steps (tag → confirm tag visible → enable public
+     access → confirm it stays) and takes about 5-15 minutes, and that it weakens a security control, is for dev/test, and
+     how to undo it. If the result contains "WHAT TO DO NOW", show those steps to the user as a simple numbered list. It is
+     also only temporary
      (this deployment): always add the **permanent fix** from the report's `add-tag-to-template` action — set the
      default of `param tags` in the template (file:line from the report) — as a suggestion, and offer to make that
      edit if the user asks. Do not edit the Bicep file unless they ask. In a terminal the same

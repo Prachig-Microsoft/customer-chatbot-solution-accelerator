@@ -136,36 +136,128 @@ def test_documented_steps_are_never_executed_even_when_approved(monkeypatch):
     assert calls == []
 
 
-def test_exemption_tag_runs_tag_first_then_enables_and_stops_on_failure(monkeypatch):
-    monkeypatch.setattr(actions_mod.shutil, "which", lambda exe: "C:/fake/" + exe)
-    prof = load_profiles()["customer-chatbot"]
-    sub = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-x"
-    cosmos = sub + "/providers/Microsoft.DocumentDB/databaseAccounts/cosmos-x"
-    a = build_action(
+class _FakeAzure:
+    """Stateful stand-in for az: tags and the Cosmos update become visible only after a number of polls."""
+
+    SUB = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-x"
+    COSMOS = SUB + "/providers/Microsoft.DocumentDB/databaseAccounts/cosmos-x"
+
+    def __init__(self, tag_polls=2, busy_polls=2, enable_conflicts=0, revert=False, never_visible=False):
+        self.tag_polls, self.busy_polls = tag_polls, busy_polls
+        self.enable_conflicts, self.revert, self.never_visible = enable_conflicts, revert, never_visible
+        self.log, self.tagged, self.polls, self.busy, self.enabled, self.shows_after_enable = [], set(), {}, 0, False, 0
+
+    def run(self, argv, **kw):
+        a = argv[1:]
+        self.log.append(" ".join(a))
+        out, code = "", 0
+        if a[:2] == ["tag", "update"]:
+            self.tagged.add(a[a.index("--resource-id") + 1])
+            self.busy = self.busy_polls  # a tag write puts the Cosmos account into Updating
+        elif a[:2] == ["tag", "list"]:
+            rid = a[a.index("--resource-id") + 1]
+            self.polls[rid] = self.polls.get(rid, 0) + 1
+            visible = rid in self.tagged and self.polls[rid] > self.tag_polls and not self.never_visible
+            out = json.dumps({"properties": {"tags": {"SecurityControl": "Ignore"} if visible else {}}})
+        elif a[:2] == ["cosmosdb", "show"]:
+            if self.busy > 0:
+                self.busy -= 1
+                state = "Updating"
+            else:
+                state = "Succeeded"
+            pna = "Enabled" if self.enabled else "Disabled"
+            if self.enabled:
+                self.shows_after_enable += 1
+                if self.revert and self.shows_after_enable > 1:
+                    pna = "Disabled"
+            out = json.dumps({"provisioningState": state, "publicNetworkAccess": pna})
+        elif a[:2] == ["cosmosdb", "update"]:
+            if self.busy > 0 or self.enable_conflicts > 0:
+                self.enable_conflicts = max(0, self.enable_conflicts - 1)
+                code, out = 1, "ERROR: Conflict: another operation is in progress"
+            else:
+                self.enabled = True
+        proc = type(
+            "P", (), {"returncode": code, "stdout": out if code == 0 else "", "stderr": "" if code == 0 else out}
+        )
+        return proc()
+
+    def first(self, prefix):
+        return next(i for i, line in enumerate(self.log) if line.startswith(prefix))
+
+
+def _tag_action():
+    return build_action(
         "apply-exemption-tag",
-        prof,
+        load_profiles()["customer-chatbot"],
         tag="SecurityControl",
         value="Ignore",
         resource_group="rg-x",
-        rg_id=sub,
-        resources={"cosmos-x": cosmos},
+        rg_id=_FakeAzure.SUB,
+        resources={"cosmos-x": _FakeAzure.COSMOS},
     )
+
+
+def _patch_az(monkeypatch, fake):
+    monkeypatch.setattr(actions_mod.shutil, "which", lambda exe: "C:/fake/" + exe)
+    monkeypatch.setattr(actions_mod.subprocess, "run", fake.run)
+    sleeps = []
+    monkeypatch.setattr(actions_mod, "_sleep", sleeps.append)
+    return sleeps
+
+
+def test_exemption_tag_waits_for_tags_and_idle_account_before_enabling(monkeypatch):
+    a = _tag_action()
     assert a.category == "approval_required"
     assert [c.split()[1] for c in a.commands] == ["tag", "tag", "cosmosdb"]
     assert execute(a, REPO_ROOT, approved=False)["executed"] is False
+    fake = _FakeAzure(tag_polls=3, busy_polls=3)
+    sleeps = _patch_az(monkeypatch, fake)
+    said = []
+    res = execute(a, REPO_ROOT, approved=True, progress=said.append)
+    assert res["executed"] and res["success"], res
+    # every tag write, then tags confirmed visible, then the account idle, and only then the enable command
+    last_tag_write = max(i for i, line in enumerate(fake.log) if line.startswith("tag update"))
+    last_tag_poll = max(i for i, line in enumerate(fake.log) if line.startswith("tag list"))
+    assert last_tag_write < last_tag_poll < fake.first("cosmosdb update")
+    assert fake.log[fake.first("cosmosdb update") - 1].startswith("cosmosdb show")
+    assert actions_mod.SETTLE_S in sleeps and actions_mod.STABLE_S in sleeps  # waited, never a blind rush
+    assert any("tags visible" in m for m in said) and any("Step 4/4" in m for m in said)
 
-    calls = _record_subprocess(monkeypatch)
-    res = execute(a, REPO_ROOT, approved=True)
-    assert res["executed"] and res["success"] and len(calls) == 3
-    assert "--tags" in calls[0] and calls[0][calls[0].index("--resource-id") + 1] == sub  # tags first
-    assert "--public-network-access" in calls[2]  # enabling comes only after the tags are in place
+
+def test_exemption_tag_does_not_enable_when_tags_never_show_up(monkeypatch):
+    fake = _FakeAzure(never_visible=True)
+    _patch_az(monkeypatch, fake)
+    res = execute(_tag_action(), REPO_ROOT, approved=True)
+    assert res["success"] is False and res["stopped_at"] == "tags not visible yet"
+    assert not any(line.startswith("cosmosdb update") for line in fake.log)  # never attempted
+    assert len(res["guidance"]) == 3 and "run the same fix again" in res["guidance"][0]
+
+
+def test_exemption_tag_retries_a_busy_account_then_succeeds(monkeypatch):
+    fake = _FakeAzure(tag_polls=0, busy_polls=0, enable_conflicts=2)
+    sleeps = _patch_az(monkeypatch, fake)
+    res = execute(_tag_action(), REPO_ROOT, approved=True)
+    assert res["success"] is True and sum(1 for ln in fake.log if ln.startswith("cosmosdb update")) == 3
+    assert sleeps.count(60) == 2
+
+
+def test_exemption_tag_reports_a_policy_that_changes_it_back(monkeypatch):
+    fake = _FakeAzure(tag_polls=0, busy_polls=0, revert=True)
+    _patch_az(monkeypatch, fake)
+    res = execute(_tag_action(), REPO_ROOT, approved=True)
+    assert res["success"] is False and res["stopped_at"] == "policy changed it back"
+
+
+def test_exemption_tag_stops_when_the_first_tag_write_fails(monkeypatch):
+    monkeypatch.setattr(actions_mod.shutil, "which", lambda exe: "C:/fake/" + exe)
+    calls = []
 
     class _Fail:
         returncode, stdout, stderr = 1, "", "AuthorizationFailed"
 
-    calls.clear()
     monkeypatch.setattr(actions_mod.subprocess, "run", lambda argv, **kw: calls.append(argv) or _Fail())
-    res = execute(a, REPO_ROOT, approved=True)
+    res = execute(_tag_action(), REPO_ROOT, approved=True)
     assert res["success"] is False and len(calls) == 1  # nothing after the failed tag command ran
 
 

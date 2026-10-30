@@ -314,3 +314,13 @@ def find_line(path: Path, pattern: str) -> Optional[int]:
         if rx.search(line):
             return i
     return None
+
+
+def template_sets_tag(repo: Path, main_rel: str, name: str) -> bool:
+    """True when the entry template already defaults `param tags` to an object containing this tag."""
+    try:
+        text = (repo / main_rel).read_text(encoding="utf-8")
+    except OSError:
+        return False
+    m = re.search(r"^param tags object\s*=\s*\{[^}]*\}", text, re.M)
+    return bool(m and name.lower() in m.group(0).lower())

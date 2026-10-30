@@ -29,7 +29,7 @@ except ImportError as exc:  # pragma: no cover - optional dependency
 mcp = FastMCP("accelerator-troubleshooter")
 
 CLI_TIMEOUT = 480  # a full health check on a large deployment can take a few minutes
-FIX_TIMEOUT = 1500  # fix + verification + a second full health check
+FIX_TIMEOUT = 2400  # tag fix waits for Azure to apply tags and the Cosmos update (typically 5-15 min), then re-checks
 
 
 def _cli(args: List[str], timeout: int = CLI_TIMEOUT) -> str:

@@ -18,6 +18,7 @@ from typing import Any, Callable, Dict, List, Tuple
 from .actions import build_action
 from .diagnostics.base import DiagContext
 from .models import CONFIRMED, FAIL, LIKELY, POSSIBLE, Action, Hypothesis
+from .repo import template_sets_tag
 
 Rule = Callable[[DiagContext], List[Tuple[Hypothesis, List[Action]]]]
 RULES: List[Tuple[int, Rule]] = []
@@ -723,12 +724,7 @@ def deployer_data_role(ctx):
 
 def _template_sets_tag(ctx, name: str) -> bool:
     """True when infra/main.bicep already defaults `param tags` to something containing this tag."""
-    try:
-        text = (ctx.repo / "infra" / "main.bicep").read_text(encoding="utf-8")
-    except OSError:
-        return False
-    m = re.search(r"^param tags object\s*=\s*\{[^}]*\}", text, re.M)
-    return bool(m and name.lower() in m.group(0).lower())
+    return template_sets_tag(ctx.repo, "infra/main.bicep", name)
 
 
 @rule(34)

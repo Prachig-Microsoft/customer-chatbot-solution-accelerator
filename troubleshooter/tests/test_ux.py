@@ -602,7 +602,14 @@ def _diag(synthetic_fixture, synthetic_env_file, text, **kw):
     return ts.diagnose(text, env_file=synthetic_env_file, log=False, **kw)
 
 
-PREFLIGHT_CHECKS = ["repo.azd_env", "repo.config_drift", "az.context", "quota.models", "models.availability"]
+PREFLIGHT_CHECKS = [
+    "repo.azd_env",
+    "repo.config_drift",
+    "repo.exemption_tag",
+    "az.context",
+    "quota.models",
+    "models.availability",
+]
 
 
 def _preflight(fixture, env_file, **kw):
@@ -624,9 +631,43 @@ def test_preflight_go_is_a_short_answer_with_a_recommended_region(synthetic_fixt
     assert len(lines) <= 14, text
     assert lines[0].startswith("PREFLIGHT: ✅ GO")
     assert "▸ AI region: eastus2 — your azd env choice, quota OK" in text
-    assert "▸ Quota (K TPM):" in text and "need 50 / free 900" in text
+    assert "▸ Quota (K TPM, live from Azure):" in text and "need 50 / free 900" in text
     assert "• Blocking: none" in text and "▸ Other OK regions:" in text
     assert "run -- azd up" in text and "azd env set" not in text  # region already chosen: nothing to set
+
+
+def test_preflight_reminds_about_the_exemption_tag_only_when_the_template_lacks_it(
+    synthetic_fixture, synthetic_env_file, tmp_path
+):
+    text, d = _preflight(synthetic_fixture, synthetic_env_file)
+    tag = next(c for c in d.checks if c.check_id == "repo.exemption_tag")
+    main = (REPO_ROOT / "infra" / "main.bicep").read_text(encoding="utf-8")
+    has_tag = "securitycontrol" in main.lower().split("param tags", 1)[-1].split("\n\n", 1)[0]
+    if has_tag:  # the working tree already carries the permanent fix
+        assert tag.status == "pass" and "Reminder" not in text
+    else:
+        assert tag.status == "info" and "• Reminder: tag SecurityControl=Ignore is not in infra/main.bicep:" in text
+        assert "param tags object = { SecurityControl: 'Ignore' }" in text and "dev/test only" in tag.summary
+    assert not blocking_status(d)  # a reminder is never a blocker
+
+    from types import SimpleNamespace
+
+    from accel_troubleshooter.diagnostics.repo_checks import exemption_tag
+
+    (tmp_path / "infra").mkdir()
+    (tmp_path / "infra" / "main.bicep").write_text("param tags object = {\n  SecurityControl: 'Ignore'\n}\n")
+    profile = {
+        "policy_exemption_tag": {"name": "SecurityControl", "value": "Ignore"},
+        "iac": {"main": "infra/main.bicep"},
+    }
+    ctx = SimpleNamespace(profile=profile, repo=tmp_path, env=SimpleNamespace(params={}))
+    assert exemption_tag(ctx).status == "pass"
+    ctx.profile = {"iac": {"main": "infra/main.bicep"}}  # accelerators without a known tag are not nagged
+    assert exemption_tag(ctx).status == "skip"
+
+
+def blocking_status(d):
+    return [c for c in d.checks if c.status in ("fail", "error")]
 
 
 def test_preflight_recommends_best_region_when_none_chosen(synthetic_fixture, tmp_path):

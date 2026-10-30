@@ -16,13 +16,14 @@ ever be executed, and only with explicit approval.
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .models import APPROVAL_REQUIRED, MANUAL, READ_ONLY, RESTRICTED, Action
 from .redact import redact_text
@@ -289,9 +290,11 @@ def build_action(action_id: str, profile: Dict[str, Any], **p: Any) -> Optional[
             f"Add the policy's exemption tag ({tag}) and re-enable Cosmos public access",
             APPROVAL_REQUIRED,
             f"The policy skips resources tagged {tag}. Steps: (1) tag the resource group and {sorted(resources)} "
-            f"with {tag}; (2) set public access back to Enabled on {cosmos or 'the affected Cosmos DB accounts'} "
-            "(the tag has to exist first, otherwise the policy reverts the change). Then the health check runs "
-            "again. This is the temporary, per-deployment fix: see add-tag-to-template for the permanent one.",
+            f"with {tag}; (2) wait until Azure shows the tag and the account finished updating (Azure applies tags "
+            f"slowly); (3) set public access back to Enabled on {cosmos or 'the affected Cosmos DB accounts'}, wait "
+            "for it to finish, and confirm the policy did not undo it; (4) run the health check again. The whole thing "
+            "can take 5-15 minutes. This is the temporary, per-deployment fix: see add-tag-to-template for the "
+            "permanent one.",
             commands=cmds,
             risk="Uses the tenant's own sanctioned exemption tag, but it still weakens a security control: use it only "
             "where your organisation's guidance allows it (for example dev/test), and never on production data. "
@@ -387,8 +390,171 @@ def _argv(cmd: str, repo: Path) -> List[str]:
     return [resolved, *parts[1:]]
 
 
+def _record(cmd: str, code: Optional[int], out: str, start: float) -> Dict[str, Any]:
+    return {
+        "command": cmd,
+        "exit_code": code,
+        "duration_ms": int((time.time() - start) * 1000),
+        "output_tail": redact_text(out.strip()[-1500:]),
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+
+
+def _run_one(cmd: str, repo: Path, timeout: int):
+    try:
+        proc = subprocess.run(
+            _argv(cmd, repo),
+            cwd=str(repo),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            encoding="utf-8",
+            errors="replace",
+            stdin=None if sys.stdin and sys.stdin.isatty() else subprocess.DEVNULL,
+        )
+        return proc.returncode, (proc.stdout + "\n" + proc.stderr), proc.stdout
+    except (OSError, ValueError, subprocess.TimeoutExpired) as e:
+        return None, str(e), ""
+
+
+# Azure applies tag and network changes asynchronously, so the exemption-tag fix waits between its steps.
+_sleep = time.sleep  # replaced in tests
+TAG_WAIT_S, IDLE_WAIT_S, ENABLE_WAIT_S = 300, 600, 900
+POLL_S, SETTLE_S, STABLE_S, CONFLICT_RETRIES = 10, 30, 45, 3
+_BUSY = ("another operation", "conflict", "in progress", "updating", "retry")
+
+TAG_FIX_FALLBACK = [
+    "Wait about 5 minutes (Azure is still applying the earlier change), then run the same fix again. Every step is "
+    "safe to repeat.",
+    "Or do it by hand: Azure portal → your Cosmos DB account → Networking → Public network access → All networks "
+    "(or Selected networks with your IP) → Save.",
+    "Then run the health check again to confirm.",
+]
+
+
+def _apply_exemption_tag(
+    action: Action, repo: Path, timeout: int, progress: Optional[Callable[[str], None]]
+) -> Dict[str, Any]:
+    """Tag first, wait until Azure shows the tags and the Cosmos account is idle, then enable public access, wait
+    again and check the policy did not revert it. Stops at the first step that fails; never retries blindly."""
+    p = action.params
+    tag, value, rg = p["tag"], p.get("value", ""), p["resource_group"]
+    say = progress or (lambda _m: None)
+    tag_ids = [p["rg_id"], *(p.get("resources") or {}).values()]
+    cosmos = [
+        n for n, rid in (p.get("resources") or {}).items() if "/microsoft.documentdb/databaseaccounts/" in rid.lower()
+    ]
+    results: List[Dict[str, Any]] = []
+
+    def fail(step: str, detail: str) -> Dict[str, Any]:
+        say(f"  ✖ {step}: {detail}")
+        return {
+            "executed": True,
+            "success": False,
+            "results": results,
+            "stopped_at": step,
+            "guidance": TAG_FIX_FALLBACK,
+        }
+
+    def run(cmd: str):
+        start = time.time()
+        code, out, _ = _run_one(cmd, repo, timeout)
+        results.append(_record(cmd, code, out, start))
+        return code, out
+
+    def az_json(cmd: str):
+        code, _, stdout = _run_one(cmd, repo, timeout)
+        try:
+            return code, json.loads(stdout)
+        except ValueError:
+            return code, None
+
+    def wait(label: str, probe: Callable[[], Any], limit: int):
+        waited, detail = 0, ""
+        start = time.time()
+        while True:
+            done, detail = probe()
+            if done:
+                results.append(_record(f"wait: {label}", 0, detail, start))
+                say(f"  ✔ {label} (after ~{waited}s)")
+                return True, detail
+            if waited >= limit:
+                results.append(_record(f"wait: {label}", 1, f"gave up after {limit}s: {detail}", start))
+                return False, detail
+            say(f"  ⏳ {label}: {detail} ({waited}s)")
+            _sleep(POLL_S)
+            waited += POLL_S
+
+    def tags_visible():
+        pending = []
+        for rid in tag_ids:
+            _, data = az_json(f"az tag list --resource-id {rid} -o json")
+            tags = ((data or {}).get("properties") or {}).get("tags") or {}
+            have = next((v for k, v in tags.items() if k.lower() == tag.lower()), None)
+            if have is None or (value and str(have).lower() != value.lower()):
+                pending.append(rid.rsplit("/", 1)[-1])
+        return not pending, ("still missing on " + ", ".join(pending)) if pending else "visible on all"
+
+    def cosmos_state(name: str):
+        _, data = az_json(f"az cosmosdb show --resource-group {rg} --name {name} -o json")
+        data = data or {}
+        return str(data.get("provisioningState") or "unknown"), str(data.get("publicNetworkAccess") or "unknown")
+
+    def all_idle():
+        states = {n: cosmos_state(n)[0] for n in cosmos}
+        busy = {n: s for n, s in states.items() if s.lower() != "succeeded"}
+        return not busy, ("; ".join(f"{n} is {s}" for n, s in busy.items()) if busy else "idle")
+
+    def all_enabled():
+        states = {n: cosmos_state(n) for n in cosmos}
+        bad = {n: s for n, s in states.items() if s[0].lower() != "succeeded" or s[1].lower() != "enabled"}
+        return not bad, ("; ".join(f"{n}: {s[0]}, public access {s[1]}" for n, s in bad.items()) if bad else "enabled")
+
+    say(f"Step 1/4  add the tag {tag}" + (f"={value}" if value else ""))
+    for cmd in [c for c in action.commands if c.startswith("az tag update")]:
+        code, out = run(cmd)
+        if code != 0:
+            return fail("tagging", out.strip()[-300:] or "az tag update failed")
+    say("Step 2/4  wait until Azure shows the tag everywhere and the Cosmos account is idle")
+    ok, detail = wait("tags visible", tags_visible, TAG_WAIT_S)
+    if not ok:
+        return fail("tags not visible yet", detail)
+    say(f"  letting Azure settle for {SETTLE_S}s so the policy sees the tag")
+    _sleep(SETTLE_S)
+    ok, detail = wait("Cosmos account idle", all_idle, IDLE_WAIT_S)
+    if not ok:
+        return fail("Cosmos still updating", detail)
+    say("Step 3/4  enable public network access (this can take several minutes)")
+    for cmd in [c for c in action.commands if c.startswith("az cosmosdb update")]:
+        for attempt in range(1, CONFLICT_RETRIES + 1):
+            code, out = run(cmd)
+            if code == 0:
+                break
+            if attempt == CONFLICT_RETRIES or not any(m in out.lower() for m in _BUSY):
+                return fail("enabling public access", out.strip()[-300:] or "az cosmosdb update failed")
+            say(f"  ⏳ Azure reported a busy account; retrying in 60s (attempt {attempt}/{CONFLICT_RETRIES})")
+            _sleep(60)
+    ok, detail = wait("public access enabled", all_enabled, ENABLE_WAIT_S)
+    if not ok:
+        return fail("public access not enabled yet", detail)
+    say(f"Step 4/4  confirm the policy does not undo it (waiting {STABLE_S}s)")
+    _sleep(STABLE_S)
+    ok, detail = all_enabled()
+    if not ok:
+        return fail(
+            "policy changed it back", detail + " (the tag was not honoured: ask the policy owner for an exemption)"
+        )
+    say("  ✔ stays enabled")
+    return {"executed": True, "success": True, "results": results}
+
+
 def execute(
-    action: Action, repo: Path, approved: bool, prefer_shell: str = "auto", timeout: int = 1800
+    action: Action,
+    repo: Path,
+    approved: bool,
+    prefer_shell: str = "auto",
+    timeout: int = 1800,
+    progress: Optional[Callable[[str], None]] = None,
 ) -> Dict[str, Any]:
     """Execute an allow-listed, approved action. Everything else is refused before any command runs."""
     base_id = action.id.split("#")[0]
@@ -417,32 +583,13 @@ def execute(
             _argv(cmd, repo)
         except (ValueError, FileNotFoundError) as e:
             return {"executed": False, "reason": str(e)}
+    if base_id == "apply-exemption-tag":
+        return _apply_exemption_tag(action, repo, timeout, progress)
     results = []
     for cmd in cmds:
         start = time.time()
-        try:
-            proc = subprocess.run(
-                _argv(cmd, repo),
-                cwd=str(repo),
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                encoding="utf-8",
-                errors="replace",
-                stdin=None if sys.stdin and sys.stdin.isatty() else subprocess.DEVNULL,
-            )
-            code, out = proc.returncode, (proc.stdout + "\n" + proc.stderr)
-        except (OSError, ValueError, subprocess.TimeoutExpired) as e:
-            code, out = None, str(e)
-        results.append(
-            {
-                "command": cmd,
-                "exit_code": code,
-                "duration_ms": int((time.time() - start) * 1000),
-                "output_tail": redact_text(out.strip()[-1500:]),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            }
-        )
+        code, out, _ = _run_one(cmd, repo, timeout)
+        results.append(_record(cmd, code, out, start))
         if code != 0:
             break
     return {"executed": True, "success": all(r["exit_code"] == 0 for r in results), "results": results}

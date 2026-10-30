@@ -146,14 +146,23 @@ def _print_action_result(args, result: Dict[str, Any]) -> None:
 
 def _apply_and_recheck(ts: Troubleshooter, args, diag, action, overrides: Dict[str, Any]) -> int:
     """Run an approved action, verify it, then repeat the full health check so the result is visible."""
-    result = actions_mod.execute(action, Path(diag.accelerator["repo_path"]), approved=True)
+    result = actions_mod.execute(
+        action,
+        Path(diag.accelerator["repo_path"]),
+        approved=True,
+        progress=lambda m: print(m, flush=True),
+    )
     if not result.get("executed"):
         print("Not executed:", result.get("reason"))
         return EXIT_FINDINGS
     print(f"\nAPPLIED  {action.id}")
     _print_action_result(args, result)
     if not result["success"]:
-        print("  Stopped at the first failing command; nothing after it was run. Nothing else was changed.")
+        print("  Stopped at the first failing step; nothing after it was run.")
+        if result.get("guidance"):
+            print("\nWHAT TO DO NOW")
+            for i, step in enumerate(result["guidance"], 1):
+                print(f"  {i}. {step}")
         return EXIT_FINDINGS
     verification = ts.verify(diag, action, env_name=args.env, env_file=args.env_file, overrides=overrides)
     diag.verification = verification
@@ -296,6 +305,7 @@ def cmd_preflight(args) -> int:
             "repo.azd_env",
             "repo.config_drift",
             "repo.git_changes",
+            "repo.exemption_tag",
             "az.context",
             "providers.registration",
             "quota.models",
@@ -569,6 +579,39 @@ def cmd_eval(args) -> int:
     return EXIT_OK if result["passed"] == result["total"] else EXIT_FINDINGS
 
 
+def cmd_install(args) -> int:
+    """Copy the troubleshooter, agent, skills and MCP entry into another accelerator repository."""
+    from . import install as install_mod
+
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    try:
+        res = install_mod.install(Path(args.target), force=args.force, full=args.full, dry_run=args.dry_run)
+    except ValueError as e:
+        print(f"Cannot install: {e}", file=sys.stderr)
+        return EXIT_ERROR
+    print(("DRY RUN - nothing was written\n" if args.dry_run else "") + f"INSTALL into {res['target']}")
+    for step in res["steps"]:
+        print(f"  • {step}")
+    if res["manual_mcp"]:
+        print("\n  Add this to .vscode/mcp.json:\n" + json.dumps(res["snippet"], indent=2))
+    found = install_mod.detect(Path(res["target"]))
+    print("\nDETECTED")
+    if found.get("confident"):
+        print(f"  ✅ This repository is recognised as: {found['accelerator']}")
+    else:
+        print("  ⚠️  No accelerator profile matches this repository yet.")
+        print("     Create troubleshooter/accel_troubleshooter/profiles/<id>.json (see README 'Extending').")
+    print(
+        "\nNEXT STEPS\n"
+        "  1. cd <that repo>; pip install -r troubleshooter/requirements-mcp.txt   (once, for chat)\n"
+        "  2. cd troubleshooter; python -m accel_troubleshooter preflight          (terminal check)\n"
+        "  3. In VS Code: Developer: Reload Window, open a new chat, pick 'accelerator-troubleshooter',\n"
+        "     send any message once (the MCP server starts with the first message), then ask 'hi'.\n"
+        "  4. Commit .github/agents, .github/skills, .vscode/mcp.json and troubleshooter/ (not .runs/ or .cache/)."
+    )
+    return EXIT_OK
+
+
 def cmd_stats(args) -> int:
     print(json.dumps(telemetry.stats(), indent=2, default=str))
     return EXIT_OK
@@ -704,6 +747,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     st = sub.add_parser("stats", help="Operational statistics from the run log")
     st.set_defaults(func=cmd_stats)
+
+    ins = sub.add_parser(
+        "install", help="Copy the troubleshooter, agent, skills and MCP entry into another accelerator repository"
+    )
+    ins.add_argument("target", help="Path of the other accelerator repository")
+    ins.add_argument("--force", action="store_true", help="Overwrite files that already exist in the target")
+    ins.add_argument("--full", action="store_true", help="Also copy tests, evals and the demo script")
+    ins.add_argument("--dry-run", action="store_true", help="Show what would happen without writing anything")
+    ins.set_defaults(func=cmd_install)
     return p
 
 
