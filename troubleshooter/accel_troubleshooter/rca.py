@@ -721,6 +721,16 @@ def deployer_data_role(ctx):
     ]
 
 
+def _template_sets_tag(ctx, name: str) -> bool:
+    """True when infra/main.bicep already defaults `param tags` to something containing this tag."""
+    try:
+        text = (ctx.repo / "infra" / "main.bicep").read_text(encoding="utf-8")
+    except OSError:
+        return False
+    m = re.search(r"^param tags object\s*=\s*\{[^}]*\}", text, re.M)
+    return bool(m and name.lower() in m.group(0).lower())
+
+
 @rule(34)
 def public_access_disabled(ctx):
     dis = ctx.facts.get("public_access_disabled") or []
@@ -776,6 +786,7 @@ def public_access_disabled(ctx):
         rg = ctx.resource_group
         sub = ctx.facts.get("subscription_id")
         ids = ctx.facts.get("resource_ids", {})
+        bicep_ref = ctx.doc_ref("infra/main.bicep", r"^param tags ")
         acts.append(
             build_action(
                 "apply-exemption-tag",
@@ -785,9 +796,19 @@ def public_access_disabled(ctx):
                 resource_group=rg,
                 rg_id=ctx.facts.get("rg_id") or (f"/subscriptions/{sub}/resourceGroups/{rg}" if sub else None),
                 resources={res: ids[res] for res, _ in policies if res in ids},
-                bicep_ref=ctx.doc_ref("infra/main.bicep", r"^param tags "),
+                bicep_ref=bicep_ref,
             )
         )
+        if bicep_ref and not _template_sets_tag(ctx, exempt["name"]):
+            acts.append(
+                build_action(
+                    "add-tag-to-template",
+                    ctx.profile,
+                    tag=exempt["name"],
+                    value=exempt.get("value", ""),
+                    bicep_ref=bicep_ref,
+                )
+            )
     if policies:
         acts.append(build_action("request-policy-exemption", ctx.profile, policies=[p for _, p in policies]))
     else:

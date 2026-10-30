@@ -291,7 +291,7 @@ def build_action(action_id: str, profile: Dict[str, Any], **p: Any) -> Optional[
             f"The policy skips resources tagged {tag}. Steps: (1) tag the resource group and {sorted(resources)} "
             f"with {tag}; (2) set public access back to Enabled on {cosmos or 'the affected Cosmos DB accounts'} "
             "(the tag has to exist first, otherwise the policy reverts the change). Then the health check runs "
-            f"again. For the NEXT deployment put the tag in the template ({p.get('bicep_ref')}) so this is not needed.",
+            "again. This is the temporary, per-deployment fix: see add-tag-to-template for the permanent one.",
             commands=cmds,
             risk="Uses the tenant's own sanctioned exemption tag, but it still weakens a security control: use it only "
             "where your organisation's guidance allows it (for example dev/test), and never on production data. "
@@ -301,6 +301,22 @@ def build_action(action_id: str, profile: Dict[str, Any], **p: Any) -> Optional[
                 "az login to the right subscription",
             ],
             verify_checks=["network.public_access"],
+            params=p,
+        )
+    if action_id == "add-tag-to-template":
+        tag, value = p["tag"], p.get("value", "")
+        return Action(
+            action_id,
+            f"Permanent fix: add {tag} to the template's default tags",
+            MANUAL,
+            f"Tagging the resource group (apply-exemption-tag) only fixes this deployment. A new `azd up` creates the "
+            f"resources untagged and the policy turns public access off again. To make it permanent, set the default "
+            f"of `param tags` in {p['bicep_ref']} (infra/main.bicep passes `tags` to every flavor, and the RG tags and "
+            "the Cosmos DB account both inherit it).",
+            commands=[f"param tags object = {{ {tag}: '{value}' }}"],
+            risk="Every resource in new deployments gets this tag, so the policy stops enforcing on all of them. Do "
+            "it only if your organisation allows the exemption for this solution (dev/test); for production use "
+            "the WAF flavor instead.",
             params=p,
         )
     if action_id == "request-policy-exemption":

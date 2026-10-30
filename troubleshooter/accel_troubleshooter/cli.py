@@ -168,6 +168,11 @@ def _apply_and_recheck(ts: Troubleshooter, args, diag, action, overrides: Dict[s
         ts, recheck_args, "check my deployment health", full=True, overrides={**overrides, "resource_group": rg}
     )
     _emit(recheck_args, after.to_dict())
+    permanent = diag.actions.get("add-tag-to-template")
+    if permanent:
+        print("\n💡 This fix is temporary (this deployment only). Permanent fix for new deployments:")
+        print(f"   {permanent.description}")
+        print(f"   → {permanent.commands[0]}")
     return EXIT_OK if verification["resolved"] else EXIT_FINDINGS
 
 

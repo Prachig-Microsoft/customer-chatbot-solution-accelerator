@@ -412,9 +412,28 @@ def test_missing_exemption_tag_is_named_from_the_policys_own_rule(synthetic_fixt
     assert any("--public-network-access ENABLED" in c for c in act.commands)
     assert "LocalAuth" not in " ".join(h.rationale)  # a local-auth policy is not the cause of a network problem
     assert "never on production" in act.risk
-    assert "main.bicep:" in act.description and "put the tag in the template" in act.description
+    assert "main.bicep:" in act.description or "add-tag-to-template" in act.description
+    perm = d.actions["add-tag-to-template"]  # the permanent fix is suggested next to the temporary one
+    assert perm.category == "manual_review" and "main.bicep:" in perm.description
+    assert perm.commands == ["param tags object = { SecurityControl: 'Ignore' }"]
+    from accel_troubleshooter.actions import EXECUTABLE_ACTIONS
+
+    assert "add-tag-to-template" not in EXECUTABLE_ACTIONS  # a code change: shown, never applied by the agent
     ids = [k.split("#")[0] for k in d.actions]
     assert ids.index("apply-exemption-tag") < ids.index("request-policy-exemption")
+
+
+def test_template_already_setting_the_tag_is_detected(tmp_path):
+    from types import SimpleNamespace
+
+    from accel_troubleshooter.rca import _template_sets_tag
+
+    (tmp_path / "infra").mkdir()
+    main = tmp_path / "infra" / "main.bicep"
+    main.write_text("param tags object = {}\n", encoding="utf-8")
+    assert _template_sets_tag(SimpleNamespace(repo=tmp_path), "SecurityControl") is False
+    main.write_text("param tags object = {\n  SecurityControl: 'Ignore'\n}\n", encoding="utf-8")
+    assert _template_sets_tag(SimpleNamespace(repo=tmp_path), "securitycontrol") is True
 
 
 def test_exemption_tag_already_present_is_not_blamed(synthetic_fixture, synthetic_env_file):
