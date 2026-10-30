@@ -572,6 +572,7 @@ def test_skills_are_valid_slash_commands():
     assert not (REPO_ROOT / ".github" / "prompts").exists()  # prompt files would duplicate the skills in the / menu
     agent = (REPO_ROOT / ".github" / "agents" / "accelerator-troubleshooter.agent.md").read_text(encoding="utf-8")
     assert "argument-hint:" in agent and "Report the tool's labels exactly" in agent
+    assert agent.count("agent: accelerator-troubleshooter") >= 4 and "handoffs:" in agent  # clickable starter questions
 
 
 def test_empty_resource_group_is_not_called_a_failure(synthetic_fixture, synthetic_env_file):
