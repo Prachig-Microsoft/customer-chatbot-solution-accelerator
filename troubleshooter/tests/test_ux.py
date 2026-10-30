@@ -538,12 +538,12 @@ def test_other_resource_group_ignores_the_azd_env_and_discovers_from_azure(synth
     assert apps.status == "pass" and "api-chat-WRONG" not in str(apps.evidence)  # real app found by discovery
 
 
-def test_prompt_files_are_valid_slash_commands():
-    """Every sample-question prompt names the real agent, only uses real tools and has the frontmatter VS Code needs."""
+def test_skills_are_valid_slash_commands():
+    """Every sample-question skill is named after its folder, only uses real tools and has the needed frontmatter."""
     import re as _re
 
-    prompts = sorted((REPO_ROOT / ".github" / "prompts").glob("*.prompt.md"))
-    assert {p.stem.replace(".prompt", "") for p in prompts} >= {
+    skills = {p.parent.name: p for p in (REPO_ROOT / ".github" / "skills").glob("*/SKILL.md")}
+    assert set(skills) >= {
         "health-check",
         "preflight",
         "why-is-this-failing",
@@ -559,15 +559,17 @@ def test_prompt_files_are_valid_slash_commands():
         "search_docs",
         "identify_accelerator",
         "list_checks",
+        "apply_fix",
     }
-    for p in prompts:
+    for folder, p in skills.items():
         text = p.read_text(encoding="utf-8")
         front = _re.match(r"^---\n(.*?)\n---\n", text, _re.S)
-        assert front, p.name
+        assert front, folder
         fm = front.group(1)
-        assert 'agent: "accelerator-troubleshooter"' in fm and "description:" in fm and "argument-hint:" in fm
-        used = set(_re.findall(r"`(\w+)` tool", text)) | set(_re.findall(r"with the `(\w+)`", text))
-        assert used <= tools, (p.name, used - tools)
+        assert f"name: {folder}\n" in fm + "\n" and "description:" in fm and "argument-hint:" in fm
+        used = set(_re.findall(r"`(\w+)` tool", text)) | set(_re.findall(r"call\s+`(\w+)`", text))
+        assert used <= tools, (folder, used - tools)
+    assert not (REPO_ROOT / ".github" / "prompts").exists()  # prompt files would duplicate the skills in the / menu
     agent = (REPO_ROOT / ".github" / "agents" / "accelerator-troubleshooter.agent.md").read_text(encoding="utf-8")
     assert "argument-hint:" in agent and "Report the tool's labels exactly" in agent
 

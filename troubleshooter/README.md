@@ -171,7 +171,8 @@ exposes no execution tool.
 read-only) plus **`apply_fix`**, the one gated write tool: it refuses unless the user approved that exact change and only
 runs allow-listed actions. Every tool runs the same CLI in a fresh process, so **chat and terminal always give the same findings**.
 In VS Code, pick the **accelerator-troubleshooter** custom agent in Copilot Chat and describe the problem, or type `/`
-and use a ready-made question (`.github/prompts/`):
+and use a ready-made question (skills in `.github/skills/`; type the command, then your text, e.g.
+`/check-resource-group rg-name`):
 
 | Slash command | Asks the agent to |
 |---|---|
