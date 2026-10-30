@@ -133,6 +133,77 @@ def _issue_text(args) -> str:
 # --------------------------------------------------------------------------- commands
 
 
+def _print_action_result(args, result: Dict[str, Any]) -> None:
+    plain = getattr(args, "plain", False)
+    ok, bad = ("OK", "FAIL") if plain else ("✅", "❌")
+    for r in result["results"]:
+        mark = ok if r["exit_code"] == 0 else bad
+        cmd = r["command"] if len(r["command"]) <= 130 else r["command"][:127] + "..."
+        print(f"  {mark} {cmd}  ({r['duration_ms'] / 1000:.1f}s)")
+        if r["exit_code"] != 0 and r["output_tail"]:
+            print("      " + r["output_tail"].replace("\n", "\n      ")[:600])
+
+
+def _apply_and_recheck(ts: Troubleshooter, args, diag, action, overrides: Dict[str, Any]) -> int:
+    """Run an approved action, verify it, then repeat the full health check so the result is visible."""
+    result = actions_mod.execute(action, Path(diag.accelerator["repo_path"]), approved=True)
+    if not result.get("executed"):
+        print("Not executed:", result.get("reason"))
+        return EXIT_FINDINGS
+    print(f"\nAPPLIED  {action.id}")
+    _print_action_result(args, result)
+    if not result["success"]:
+        print("  Stopped at the first failing command; nothing after it was run. Nothing else was changed.")
+        return EXIT_FINDINGS
+    verification = ts.verify(diag, action, env_name=args.env, env_file=args.env_file, overrides=overrides)
+    diag.verification = verification
+    print("\nVERIFY")
+    for row in verification["checks"]:
+        print(f"  • {row['check']}: {row['before']} → {row['after']}  {row['summary'][:110]}")
+    print("  " + ("✔ fix verified" if verification["resolved"] else "✖ not resolved yet (policy/replication can lag)"))
+    print("\nRe-running the full health check ...")
+    rg = diag.targets.get("resource_group")
+    recheck_args = argparse.Namespace(**{**vars(args), "out": None})
+    after = _diagnose(
+        ts, recheck_args, "check my deployment health", full=True, overrides={**overrides, "resource_group": rg}
+    )
+    _emit(recheck_args, after.to_dict())
+    return EXIT_OK if verification["resolved"] else EXIT_FINDINGS
+
+
+def _print_proposal(action) -> None:
+    print(f"\n🟡 Proposed fix: {action.title}")
+    print(f"   {action.description}")
+    for c in action.commands:
+        print(f"   $ {c if len(c) <= 130 else c[:127] + '...'}")
+    print(f"   Risk: {action.risk}")
+
+
+def _offer_fix(ts: Troubleshooter, args, diag) -> None:
+    """After an interactive diagnosis, offer a small fix and apply it only if the user types 'yes'."""
+    if not sys.stdin.isatty() or getattr(args, "no_prompt", False) or getattr(args, "format", "compact") == "json":
+        return
+    action = next(
+        (
+            a
+            for a in diag.actions.values()
+            if a.category == APPROVAL_REQUIRED
+            and a.id.split("#")[0] in actions_mod.OFFER_INLINE
+            and not a.params.get("manual")
+        ),
+        None,
+    )
+    if action is None:
+        return
+    _print_proposal(action)
+    sys.stdout.write("\nApply this fix now? Type 'yes' to apply, anything else to skip: ")
+    sys.stdout.flush()
+    if sys.stdin.readline().strip().lower() not in ("yes", "y"):
+        print("Skipped. Nothing was changed.")
+        return
+    _apply_and_recheck(ts, args, diag, action, _overrides(args))
+
+
 def cmd_diagnose(args) -> int:
     text = _issue_text(args)
     if not text:
@@ -146,6 +217,7 @@ def cmd_diagnose(args) -> int:
     only = args.only.split(",") if args.only else None
     diag = _diagnose(ts, args, text, full=args.full, only_checks=only)
     _emit(args, diag.to_dict())
+    _offer_fix(ts, args, diag)
     return _finish(ts, diag)
 
 
@@ -261,6 +333,7 @@ def cmd_health(args) -> int:
     ts = _ts(args)
     diag = _diagnose(ts, args, "check my deployment health", full=True)
     _emit(args, diag.to_dict())
+    _offer_fix(ts, args, diag)
     return _finish(ts, diag)
 
 
@@ -452,7 +525,10 @@ def cmd_fix(args) -> int:
     if action is None:
         print(f"Action '{args.action_id}' is not proposed by the current diagnosis. Proposed: {list(diag.actions)}")
         return EXIT_ERROR
-    print(json.dumps(action.to_dict(), indent=2))
+    if args.format == "json":
+        print(json.dumps(action.to_dict(), indent=2))
+    else:
+        _print_proposal(action)
     if action.category == RESTRICTED:
         print("\n🔴 Restricted action: the agent will not execute it. Follow the documented manual steps above.")
         return EXIT_FINDINGS
@@ -472,16 +548,10 @@ def cmd_fix(args) -> int:
         if answer != action.id:
             print("Not confirmed — nothing executed.")
             return EXIT_FINDINGS
-    result = actions_mod.execute(action, Path(diag.accelerator["repo_path"]), approved=args.approve)
-    print("\nExecution:", json.dumps(result, indent=2))
-    if not result.get("executed"):
-        return EXIT_FINDINGS
-    verification = ts.verify(diag, action, env_name=args.env, env_file=args.env_file, overrides=o)
-    diag.verification = verification
-    print("\nVerification:", json.dumps(verification, indent=2))
-    if args.out:
+    rc = _apply_and_recheck(ts, args, diag, action, o)
+    if args.out and diag.verification:
         Path(args.out).write_text(render_markdown(diag.to_dict()), encoding="utf-8")
-    return EXIT_OK if verification["resolved"] else EXIT_FINDINGS
+    return rc
 
 
 def cmd_eval(args) -> int:

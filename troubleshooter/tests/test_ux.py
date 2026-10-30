@@ -404,12 +404,15 @@ def test_missing_exemption_tag_is_named_from_the_policys_own_rule(synthetic_fixt
     assert h.status == "confirmed" and "'SecurityControl' exemption tag is missing" in h.title
     assert "SecurityControl=Ignore" in h.rationale[0] and "applied" in h.rationale[0]
     act = d.actions["apply-exemption-tag"]
-    assert act.category == "manual_review"  # weakens a security control: shown, never run by the agent
+    assert act.category == "approval_required"  # only runs after an explicit yes; still never without approval
     assert any("--tags SecurityControl=Ignore" in c for c in act.commands)
+    assert any(c.startswith("az tag update --resource-id /subscriptions/") for c in act.commands)
+    assert any("--public-network-access ENABLED" in c and "--name cosmos-demo" in c for c in act.commands)
+    assert not any("<" in c for c in act.commands)  # fully generated: nothing left for a human to fill in
     assert any("--public-network-access ENABLED" in c for c in act.commands)
     assert "LocalAuth" not in " ".join(h.rationale)  # a local-auth policy is not the cause of a network problem
     assert "never on production" in act.risk
-    assert "main.bicep:" in act.description and "param tags" in act.description
+    assert "main.bicep:" in act.description and "put the tag in the template" in act.description
     ids = [k.split("#")[0] for k in d.actions]
     assert ids.index("apply-exemption-tag") < ids.index("request-policy-exemption")
 

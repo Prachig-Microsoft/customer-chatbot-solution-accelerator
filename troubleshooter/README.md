@@ -137,7 +137,7 @@ Hypotheses also carry `contradicting` evidence (e.g. "quota is sufficient *now* 
 | Category | Examples | Behaviour |
 |---|---|---|
 | 🟢 read-only | all diagnostics, `quota_check_params.sh` | diagnostics run automatically; listed scripts are for you to run |
-| 🟡 approval required | `azd env set` capacity/region, `az provider register`, restart web app, rerun post-provision scripts, re-create a template-declared role assignment | only tool-generated commands on the executor allow-list (`EXECUTABLE_ACTIONS`) run, and only via `fix <id> --approve` + typed confirmation; verification checks re-run afterwards. Long-running/cost-incurring steps (`azd provision`, new env, log streaming) are shown but you run them yourself. |
+| 🟡 approval required | `azd env set` capacity/region, `az provider register`, restart/start web app, rerun post-provision scripts, re-create a template-declared role assignment, **add the policy's exemption tag and re-enable Cosmos public access** (`apply-exemption-tag`) | only tool-generated commands on the executor allow-list (`EXECUTABLE_ACTIONS`) run, and only after you answer **yes** (terminal: "Apply this fix now? Type 'yes'", or `fix <id> --approve`; chat: the agent asks yes/no, then calls the gated `apply_fix` tool). Verification checks and a full health check re-run afterwards. Long-running/cost-incurring steps (`azd provision`, new env, log streaming) are shown but you run them yourself. |
 | 📘 documented steps | resolution steps copied from the accelerator's troubleshooting guide | displayed with their doc reference; never executed (some are destructive, e.g. `azd down --purge`) |
 | 🔴 restricted | delete RG / `azd down --purge`, purge soft-deleted resources, quota increase requests, enabling public network access, deleting other deployments | never executed; documented manual steps only |
 
@@ -167,8 +167,9 @@ exposes no execution tool.
 `.vscode/mcp.json` registers the stdio server `accelerator-troubleshooter`
 (`python troubleshooter/mcp_launcher.py`, with no `cwd` or `${workspaceFolder}` so it starts from any host; requires
 `pip install -r troubleshooter/requirements-mcp.txt`). Its tools are
-`identify_accelerator`, `search_docs`, `health_check`, `diagnose`, `quota_check`, `preflight` and `list_checks`, all
-read-only. Every tool runs the same CLI in a fresh process, so **chat and terminal always give the same findings**.
+`identify_accelerator`, `search_docs`, `health_check`, `diagnose`, `quota_check`, `preflight` and `list_checks` (all
+read-only) plus **`apply_fix`**, the one gated write tool: it refuses unless the user approved that exact change and only
+runs allow-listed actions. Every tool runs the same CLI in a fresh process, so **chat and terminal always give the same findings**.
 In VS Code, pick the **accelerator-troubleshooter** custom agent in Copilot Chat and describe the problem, or type `/`
 and use a ready-made question (`.github/prompts/`):
 
@@ -237,7 +238,7 @@ in, or the repo could not be found).
 | 1 | `az webapp stop -g <rg> -n <api-app>` | `diagnose "the chat is not responding"` | confirmed: App Service stopped, HTTP 403 probe; then `fix start-webapp --approve` starts it and verifies fail→pass |
 | 2 | blank one setting: `az webapp config appsettings set -g <rg> -n <api-app> --settings COSMOS_DB_ENDPOINT=` | `diagnose "I changed a setting and chat stopped"` | the exact missing setting + the Bicep lines that declare it (restore the value afterwards) |
 | 3 | submit a deployment requesting 5000K TPM of the chat model on the AI account (Azure rejects it, nothing is created) | `diagnose "my deployment failed"` (no error pasted) | confirmed InsufficientQuota read from the failed ARM operation, with requested vs available numbers (delete the failed deployment record afterwards) |
-| 4 | nothing to break: tenant policy | `diagnose "chat does not work, network?"` | confirmed: Azure Policy `CosmosDB_PublicNetwork_Modify` (found with `az policy state list`) turned Cosmos public access off because the resource and its resource group lack the exemption tag the policy's own rule names (`SecurityControl=Ignore`, read from the policy definition). Non-WAF flavor, so it did not come from the template. Options: 📘 add the tag (for dev/test only, never run by the agent), 🔴 ask the policy owner for an exemption, 📘 deploy the WAF flavor instead |
+| 4 | nothing to break: tenant policy | `diagnose "chat does not work, network?"` | confirmed: Azure Policy `CosmosDB_PublicNetwork_Modify` (found with `az policy state list`) turned Cosmos public access off because the resource and its resource group lack the exemption tag the policy's own rule names (`SecurityControl=Ignore`, read from the policy definition). Non-WAF flavor, so it did not come from the template. Options: 🟡 add the tag + re-enable public access (dev/test only; the agent asks yes/no, applies it, then re-runs the health check), 🔴 ask the policy owner for an exemption, 📘 deploy the WAF flavor instead |
 
 ## Extending to another accelerator
 

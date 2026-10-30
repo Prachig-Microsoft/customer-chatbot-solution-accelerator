@@ -91,6 +91,21 @@ def test_mcp_server_lists_read_only_tools():
         if "text" not in result or "BrokenResource" not in repr(exc):
             raise
     tools, text = result["tools"], result["text"]
-    assert {"identify_accelerator", "search_docs", "diagnose", "quota_check", "preflight", "list_checks"} <= tools
-    assert not any("fix" in t or "execute" in t for t in tools)
+    assert {"identify_accelerator", "search_docs", "health_check", "diagnose", "quota_check", "preflight"} <= tools
+    assert {t for t in tools if "fix" in t or "execute" in t} == {"apply_fix"}  # the single, gated write tool
     assert "chat-with-your-data" in text
+
+
+def test_apply_fix_refuses_without_user_approval_and_for_non_allowlisted_actions(monkeypatch):
+    from accel_troubleshooter import mcp_server
+
+    ran = []
+    monkeypatch.setattr(mcp_server, "_cli", lambda *a, **k: ran.append(a) or "ran")
+    assert "not approved" in mcp_server.apply_fix("apply-exemption-tag", user_approved=False)
+    assert "not an action the agent can execute" in mcp_server.apply_fix("azd-down", user_approved=True)
+    assert "not an action" in mcp_server.apply_fix("request-policy-exemption", user_approved=True)
+    assert ran == []
+    assert mcp_server.apply_fix("apply-exemption-tag", user_approved=True, resource_group="rg-x") == "ran"
+    argv = ran[0][0]
+    assert argv[:2] == ["fix", "apply-exemption-tag"] and "--approve" in argv and "--yes" in argv
+    assert argv[argv.index("--resource-group") + 1] == "rg-x"

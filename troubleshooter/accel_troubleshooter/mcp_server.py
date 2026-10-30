@@ -6,8 +6,9 @@ Every tool runs the real CLI (``python -m accel_troubleshooter ...``) in a **fre
 terminal use exactly the same code and give the same findings, and a long-lived server can never serve stale code
 after the troubleshooter is updated.
 
-Remediation execution is intentionally NOT exposed here: state-changing actions are executed only through the
-CLI ``fix <action-id> --approve`` with an interactive confirmation typed by a human.
+Remediation: read-only tools never change anything. The one state-changing tool, ``apply_fix``, refuses unless the
+caller passes ``user_approved=true`` (the agent instructions allow that only after the user said yes to the shown
+change) and only runs the small allow-list in ``actions.EXECUTABLE_ACTIONS``; it then verifies and re-checks health.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ import subprocess
 import sys
 from typing import List, Optional
 
+from .actions import EXECUTABLE_ACTIONS
 from .repo import TOOL_ROOT
 
 try:
@@ -27,6 +29,7 @@ except ImportError as exc:  # pragma: no cover - optional dependency
 mcp = FastMCP("accelerator-troubleshooter")
 
 CLI_TIMEOUT = 480  # a full health check on a large deployment can take a few minutes
+FIX_TIMEOUT = 1500  # fix + verification + a second full health check
 
 
 def _cli(args: List[str], timeout: int = CLI_TIMEOUT) -> str:
@@ -141,6 +144,34 @@ def preflight(accelerator: Optional[str] = None, region: Optional[str] = None) -
     """Pre-deployment check (login, providers, quota in all allowed regions, model availability, config drift).
     Returns a GO / NO-GO verdict with a recommended region."""
     return _cli(["preflight", *_common(accelerator, None, region)])
+
+
+@mcp.tool()
+def apply_fix(
+    action_id: str,
+    user_approved: bool,
+    issue: str = "check my deployment health",
+    resource_group: Optional[str] = None,
+    accelerator: Optional[str] = None,
+    region: Optional[str] = None,
+    env: Optional[str] = None,
+    subscription: Optional[str] = None,
+) -> str:
+    """CHANGES AZURE/LOCAL STATE. Apply ONE fix proposed by a previous diagnose/health_check, then verify it and
+    re-run the full health check. Call this ONLY after you showed the user the proposed fix (its commands and risk,
+    from the report) and the user explicitly answered yes in this conversation. Pass user_approved=true only in that
+    case. action_id is the id shown under 'NEXT'/'Recommended remediation' (e.g. apply-exemption-tag). Use the same
+    issue/resource_group you used for the diagnosis. Only a small allow-list of fixes can run; anything else is
+    refused."""
+    base = action_id.split("#")[0]
+    if base not in EXECUTABLE_ACTIONS:
+        return f"'{base}' is not an action the agent can execute. Show the documented steps to the user instead."
+    if not user_approved:
+        return (
+            "Not applied: the user has not approved this change. Ask them first and call again with user_approved=true."
+        )
+    args = ["fix", action_id, "--issue", issue, "--approve", "--yes", "--full"]
+    return _cli(args + _common(accelerator, resource_group, region, env, subscription), timeout=FIX_TIMEOUT)
 
 
 @mcp.tool()

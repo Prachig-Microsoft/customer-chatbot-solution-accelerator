@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from accel_troubleshooter import actions as actions_mod
 from accel_troubleshooter.actions import build_action, execute
 from accel_troubleshooter.azcli import AzRunner, CommandNotAllowed, OfflineRunner, ReplayRunner, anonymize, is_read_only
 from accel_troubleshooter.models import APPROVAL_REQUIRED, Action
@@ -133,6 +134,39 @@ def test_documented_steps_are_never_executed_even_when_approved(monkeypatch):
     arbitrary = Action("probe", "probe", APPROVAL_REQUIRED, "x", commands=["git --version"])
     assert execute(arbitrary, REPO_ROOT, approved=True)["executed"] is False
     assert calls == []
+
+
+def test_exemption_tag_runs_tag_first_then_enables_and_stops_on_failure(monkeypatch):
+    monkeypatch.setattr(actions_mod.shutil, "which", lambda exe: "C:/fake/" + exe)
+    prof = load_profiles()["customer-chatbot"]
+    sub = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-x"
+    cosmos = sub + "/providers/Microsoft.DocumentDB/databaseAccounts/cosmos-x"
+    a = build_action(
+        "apply-exemption-tag",
+        prof,
+        tag="SecurityControl",
+        value="Ignore",
+        resource_group="rg-x",
+        rg_id=sub,
+        resources={"cosmos-x": cosmos},
+    )
+    assert a.category == "approval_required"
+    assert [c.split()[1] for c in a.commands] == ["tag", "tag", "cosmosdb"]
+    assert execute(a, REPO_ROOT, approved=False)["executed"] is False
+
+    calls = _record_subprocess(monkeypatch)
+    res = execute(a, REPO_ROOT, approved=True)
+    assert res["executed"] and res["success"] and len(calls) == 3
+    assert "--tags" in calls[0] and calls[0][calls[0].index("--resource-id") + 1] == sub  # tags first
+    assert "--public-network-access" in calls[2]  # enabling comes only after the tags are in place
+
+    class _Fail:
+        returncode, stdout, stderr = 1, "", "AuthorizationFailed"
+
+    calls.clear()
+    monkeypatch.setattr(actions_mod.subprocess, "run", lambda argv, **kw: calls.append(argv) or _Fail())
+    res = execute(a, REPO_ROOT, approved=True)
+    assert res["success"] is False and len(calls) == 1  # nothing after the failed tag command ran
 
 
 def test_cli_fix_never_runs_documented_commands(monkeypatch, capsys):

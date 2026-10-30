@@ -40,8 +40,12 @@ EXECUTABLE_ACTIONS = frozenset(
         "restart-webapp",
         "start-webapp",
         "assign-app-role",
+        "apply-exemption-tag",
     }
 )
+
+# Small, quick, reversible fixes the CLI offers right after a diagnosis ("apply it now? yes/no").
+OFFER_INLINE = frozenset({"apply-exemption-tag", "start-webapp"})
 
 
 def _ps_or_sh(profile: Dict[str, Any], key: str) -> Dict[str, str]:
@@ -272,24 +276,31 @@ def build_action(action_id: str, profile: Dict[str, Any], **p: Any) -> Optional[
         )
     if action_id == "apply-exemption-tag":
         tag = f"{p['tag']}={p['value']}" if p.get("value") else p["tag"]
-        rg_cmd = f"az tag update --resource-id <resource-group-id> --operation merge --tags {tag}"
-        cmds = [
-            rg_cmd,
-            "az cosmosdb update --resource-group " + p["resource_group"] + " --name <cosmos-account> "
-            "--public-network-access ENABLED",
-        ]
+        rg = p["resource_group"]
+        rg_id = p.get("rg_id") or "<resource-group-id>"
+        resources = p.get("resources") or {}
+        cosmos = [n for n, rid in resources.items() if "/microsoft.documentdb/databaseaccounts/" in rid.lower()]
+        cmds = [f"az tag update --resource-id {rg_id} --operation Merge --tags {tag}"]
+        cmds += [f"az tag update --resource-id {rid} --operation Merge --tags {tag}" for rid in resources.values()]
+        # The tag only stops the policy from acting on future writes; it does not undo what it already changed.
+        cmds += [f"az cosmosdb update --resource-group {rg} --name {n} --public-network-access ENABLED" for n in cosmos]
         return Action(
             action_id,
-            f"Add the policy's exemption tag ({tag}) and re-enable public access",
-            MANUAL,
-            f"The policy skips resources tagged {tag}. For the NEXT deployment put it in the template "
-            f"(`param tags object = {{ {p['tag']}: '{p.get('value', '')}' }}`, {p.get('bicep_ref')}). For this one: "
-            "tag the resource group, then set Cosmos public access back to Enabled (the policy only acts on writes, "
-            "so the tag must be in place first), and re-enable it after the post-provision script, which restores "
-            "the old 'Disabled' value when it finishes.",
+            f"Add the policy's exemption tag ({tag}) and re-enable Cosmos public access",
+            APPROVAL_REQUIRED,
+            f"The policy skips resources tagged {tag}. Steps: (1) tag the resource group and {sorted(resources)} "
+            f"with {tag}; (2) set public access back to Enabled on {cosmos or 'the affected Cosmos DB accounts'} "
+            "(the tag has to exist first, otherwise the policy reverts the change). Then the health check runs "
+            f"again. For the NEXT deployment put the tag in the template ({p.get('bicep_ref')}) so this is not needed.",
             commands=cmds,
             risk="Uses the tenant's own sanctioned exemption tag, but it still weakens a security control: use it only "
-            "where your organisation's guidance allows it (for example dev/test), and never on production data.",
+            "where your organisation's guidance allows it (for example dev/test), and never on production data. "
+            "Undo: remove the tag and set public access to Disabled.",
+            prerequisites=[
+                "Tag Contributor (or Contributor) on the resource group",
+                "az login to the right subscription",
+            ],
+            verify_checks=["network.public_access"],
             params=p,
         )
     if action_id == "request-policy-exemption":

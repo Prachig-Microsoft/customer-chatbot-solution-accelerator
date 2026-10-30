@@ -774,6 +774,8 @@ def public_access_disabled(ctx):
     acts: List[Action] = []
     if tag_missing:
         rg = ctx.resource_group
+        sub = ctx.facts.get("subscription_id")
+        ids = ctx.facts.get("resource_ids", {})
         acts.append(
             build_action(
                 "apply-exemption-tag",
@@ -781,7 +783,8 @@ def public_access_disabled(ctx):
                 tag=exempt["name"],
                 value=exempt.get("value", ""),
                 resource_group=rg,
-                resources=ctx.facts.get("resource_ids", {}),
+                rg_id=ctx.facts.get("rg_id") or (f"/subscriptions/{sub}/resourceGroups/{rg}" if sub else None),
+                resources={res: ids[res] for res, _ in policies if res in ids},
                 bicep_ref=ctx.doc_ref("infra/main.bicep", r"^param tags "),
             )
         )

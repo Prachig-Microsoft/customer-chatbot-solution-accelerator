@@ -161,6 +161,7 @@ def rg_state(ctx: DiagContext) -> CheckResult:
     state = (data.get("properties") or {}).get("provisioningState")
     ctx.facts["rg_location"] = data.get("location")
     ctx.facts["rg_tags"] = data.get("tags") or {}
+    ctx.facts["rg_id"] = data.get("id")
     ev = {
         "resource_group": rg,
         "location": data.get("location"),
