@@ -49,6 +49,18 @@ Every command that needs a resource group finds it the same way, and prints wher
 6. otherwise **it asks you** ("Resource group name (Enter to skip)"). `--no-prompt`, CI and the MCP server never ask;
    they list the resource group under "Still needed" instead.
 
+**A resource group that is not your current azd environment** (a colleague's, an older one, another region):
+
+```powershell
+python -m accel_troubleshooter health --resource-group rg-other
+python -m accel_troubleshooter health --resource-group rg-other --region swedencentral   # only if auto-detect is wrong
+az account set --subscription <id>; python -m accel_troubleshooter health --resource-group rg-other   # other subscription
+```
+
+When the group differs from the azd environment, the environment's app names, URLs and capacities are ignored (they
+belong to another deployment) and everything is discovered from Azure; the AI region comes from the AI account found in
+that group.
+
 ### Output
 
 The default output is a compact **bullet** summary (verdict or cause, one bullet per check, quota, top findings with their
@@ -155,8 +167,22 @@ exposes no execution tool.
 `.vscode/mcp.json` registers the stdio server `accelerator-troubleshooter`
 (`python troubleshooter/mcp_launcher.py`, with no `cwd` or `${workspaceFolder}` so it starts from any host; requires
 `pip install -r troubleshooter/requirements-mcp.txt`). Its tools are
-`identify_accelerator`, `search_docs`, `diagnose`, `quota_check`, `preflight` and `list_checks`, all read-only.
-In VS Code, pick the **accelerator-troubleshooter** custom agent in Copilot Chat and describe the problem.
+`identify_accelerator`, `search_docs`, `health_check`, `diagnose`, `quota_check`, `preflight` and `list_checks`, all
+read-only. Every tool runs the same CLI in a fresh process, so **chat and terminal always give the same findings**.
+In VS Code, pick the **accelerator-troubleshooter** custom agent in Copilot Chat and describe the problem, or type `/`
+and use a ready-made question (`.github/prompts/`):
+
+| Slash command | Asks the agent to |
+|---|---|
+| `/health-check` | check the deployed solution (current azd env, or `rg-name` if you give one) |
+| `/check-resource-group` | check any resource group by name |
+| `/preflight` | GO / NO-GO and recommended region before `azd up` |
+| `/why-is-this-failing` | diagnose a pasted error or symptom |
+| `/quota-check` | model quota vs required capacity |
+| `/search-the-docs` | search the accelerator docs and troubleshooting guide |
+
+After you update the troubleshooter code, restart the MCP server once (Command Palette → **MCP: List Servers** →
+`accelerator-troubleshooter` → **Restart**) so chat does not keep running an older copy.
 
 ## Knowledge index
 

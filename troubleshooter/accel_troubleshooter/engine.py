@@ -239,8 +239,21 @@ class Troubleshooter:
             env = AzdEnv()
         else:
             env = load_env_file(Path(env_file)) if env_file else load_azd_env(repo, env_name)
+        overrides = dict(overrides or {})
+        env_rg = env.get(profile.get("azd_env_keys", {}).get("resource_group"))
+        if overrides.get("resource_group") and env_rg and overrides["resource_group"] != env_rg:
+            # A different resource group than the azd environment's: its names, URLs and capacities belong to another
+            # deployment, so ignore them and discover everything from Azure instead.
+            overrides["foreign_env"] = env.name
+            env = AzdEnv()
+            if not overrides.get("region") and self.runner.mode != "offline":
+                ok, accounts, _ = self.runner.run(
+                    ["cognitiveservices", "account", "list", "--resource-group", overrides["resource_group"]]
+                )
+                if ok and accounts:
+                    overrides["region"] = accounts[0].get("location") or ""
         ctx = DiagContext(
-            profile=profile, repo=repo, issue=issue, env=env, runner=self.runner, index=idx, overrides=overrides or {}
+            profile=profile, repo=repo, issue=issue, env=env, runner=self.runner, index=idx, overrides=overrides
         )
         planned = self.plan_checks(issue, full, only_checks)
         if self.runner.mode != "offline" and any(c in NEEDS_RG for c in planned):

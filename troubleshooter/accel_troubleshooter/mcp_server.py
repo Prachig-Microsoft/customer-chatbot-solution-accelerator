@@ -1,6 +1,10 @@
 """MCP server exposing the troubleshooter's read-only capabilities to GitHub Copilot (VS Code agent mode).
 
-Run:  python -m accel_troubleshooter.mcp_server      (stdio transport)
+Run:  python troubleshooter/mcp_launcher.py      (stdio transport)
+
+Every tool runs the real CLI (``python -m accel_troubleshooter ...``) in a **fresh process**. That guarantees chat and
+terminal use exactly the same code and give the same findings, and a long-lived server can never serve stale code
+after the troubleshooter is updated.
 
 Remediation execution is intentionally NOT exposed here: state-changing actions are executed only through the
 CLI ``fix <action-id> --approve`` with an interactive confirmation typed by a human.
@@ -8,13 +12,12 @@ CLI ``fix <action-id> --approve`` with an interactive confirmation typed by a hu
 
 from __future__ import annotations
 
-import json
-from typing import Optional
+import os
+import subprocess
+import sys
+from typing import List, Optional
 
-from .azcli import AzRunner, OfflineRunner
-from .diagnostics import CHECKS
-from .engine import Troubleshooter
-from .report import render_markdown
+from .repo import TOOL_ROOT
 
 try:
     from mcp.server.fastmcp import FastMCP
@@ -23,42 +26,81 @@ except ImportError as exc:  # pragma: no cover - optional dependency
 
 mcp = FastMCP("accelerator-troubleshooter")
 
-
-def _ts(offline: bool) -> Troubleshooter:
-    return Troubleshooter(runner=OfflineRunner() if offline else AzRunner())
+CLI_TIMEOUT = 480  # a full health check on a large deployment can take a few minutes
 
 
-def _overrides(resource_group: Optional[str], region: Optional[str], all_regions: bool = False) -> dict:
-    o = {}
-    if resource_group:
-        o["resource_group"] = resource_group
-    if region:
-        o["region"] = region
-    if all_regions:
-        o["all_regions"] = True
-    return o
+def _cli(args: List[str], timeout: int = CLI_TIMEOUT) -> str:
+    """Run the CLI in a fresh interpreter and return its text. Exit codes 1-3 (findings, clarification) are normal."""
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "NO_COLOR": "1"}
+    try:
+        res = subprocess.run(
+            [sys.executable, "-m", "accel_troubleshooter", *args],
+            cwd=str(TOOL_ROOT),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            stdin=subprocess.DEVNULL,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        return f"The troubleshooter did not finish within {timeout} s. Try again, or run it in a terminal."
+    out = (res.stdout or "").strip()
+    err = (res.stderr or "").strip()
+    return out or err or f"(no output, exit code {res.returncode})"
+
+
+def _common(
+    accelerator: Optional[str],
+    resource_group: Optional[str],
+    region: Optional[str],
+    env: Optional[str] = None,
+    subscription: Optional[str] = None,
+    offline: bool = False,
+) -> List[str]:
+    args = ["--no-prompt", "--format", "full"]
+    for flag, value in (
+        ("--accelerator", accelerator),
+        ("--resource-group", resource_group),
+        ("--region", region),
+        ("--env", env),
+        ("--subscription", subscription),
+    ):
+        if value:
+            args += [flag, value]
+    if offline:
+        args.append("--offline")
+    return args
 
 
 @mcp.tool()
 def identify_accelerator(issue: str, accelerator: Optional[str] = None) -> str:
     """Identify which Azure solution accelerator an issue belongs to. Returns a clarification question when
     identification is ambiguous — ask the user that question instead of guessing."""
-    return json.dumps(_ts(True).identify(issue, accelerator), indent=2)
+    return _cli(["identify", issue] + (["--accelerator", accelerator] if accelerator else []), timeout=120)
 
 
 @mcp.tool()
 def search_docs(query: str, accelerator: Optional[str] = None, k: int = 5) -> str:
     """Search the accelerator's indexed troubleshooting/deployment docs and scripts. Every hit includes file path,
     line range, repo, branch and commit so it can be cited."""
-    ts = _ts(True)
-    accel = accelerator or ts.identify(query)["accelerator"]
-    if not accel:
-        return ts.identify(query)["question"]
-    idx = ts.index_for(accel)
-    if idx is None:
-        return f"Repository for {accel} not available locally."
-    hits = idx.search(query, k=k, error_codes=[w for w in query.split() if w[:1].isupper()])
-    return json.dumps([h.to_dict() | {"text": h.text[:1200]} for h in hits], indent=2)
+    args = ["search", query, "-k", str(k), "--format", "json"]
+    return _cli(args + (["--accelerator", accelerator] if accelerator else []), timeout=180)
+
+
+@mcp.tool()
+def health_check(
+    resource_group: Optional[str] = None,
+    accelerator: Optional[str] = None,
+    env: Optional[str] = None,
+    region: Optional[str] = None,
+    subscription: Optional[str] = None,
+) -> str:
+    """Full read-only health check of a deployed accelerator. By default it checks the current azd environment's
+    resource group. To check a different resource group pass resource_group (and region if it is not discoverable);
+    if that group is in another subscription the user must first run 'az account set --subscription <id>'."""
+    return _cli(["health", *_common(accelerator, resource_group, region, env, subscription)])
 
 
 @mcp.tool()
@@ -69,63 +111,42 @@ def diagnose(
     region: Optional[str] = None,
     offline: bool = False,
     full: bool = False,
+    env: Optional[str] = None,
+    subscription: Optional[str] = None,
 ) -> str:
-    """Run the full evidence-based diagnosis (read-only Azure CLI checks + docs + repo config) and return a
-    Markdown incident report with confirmed findings, likely/alternative causes, missing evidence, cited docs and
-    categorized remediation (read-only / approval required / restricted)."""
-    ts = _ts(offline)
-    diag = ts.diagnose(issue, accelerator=accelerator, overrides=_overrides(resource_group, region), full=full)
-    return render_markdown(diag.to_dict())
+    """Run the evidence-based diagnosis (read-only Azure CLI checks + docs + repo config) for a problem described in
+    plain words (or pasted error text) and return a Markdown report with confirmed findings, likely/alternative
+    causes, missing evidence, cited docs and categorized remediation (read-only / approval required / restricted).
+    resource_group defaults to the current azd environment's; pass it to investigate a different resource group."""
+    args = ["diagnose", issue, *_common(accelerator, resource_group, region, env, subscription, offline)]
+    return _cli(args + (["--full"] if full else []))
 
 
 @mcp.tool()
 def quota_check(
-    accelerator: Optional[str] = None, region: Optional[str] = None, capacity_overrides: Optional[dict] = None
+    accelerator: Optional[str] = None,
+    region: Optional[str] = None,
+    capacity_overrides: Optional[dict] = None,
 ) -> str:
     """End-to-end model quota workflow: derive required models/capacity from the accelerator's Bicep + azd env,
     read live quota for the target (or all allowed) regions, and recommend a region/capacity."""
-    ts = _ts(False)
-    o = _overrides(None, region, all_regions=not region)
-    if capacity_overrides:
-        o["capacity_overrides"] = {k: int(v) for k, v in capacity_overrides.items()}
-    diag = ts.diagnose(
-        "quota check: is there enough model quota to deploy?",
-        accelerator=accelerator,
-        overrides=o,
-        only_checks=["repo.azd_env", "repo.config_drift", "az.context", "quota.models", "models.availability"],
-    )
-    return render_markdown(diag.to_dict(), verbose=True)
+    args = ["quota", *_common(accelerator, None, region)]
+    for param, value in (capacity_overrides or {}).items():
+        args += ["--capacity", f"{param}={int(value)}"]
+    return _cli(args)
 
 
 @mcp.tool()
-def preflight(accelerator: Optional[str] = None) -> str:
-    """Pre-deployment health check (auth, providers, quota in all allowed regions, model availability, config
-    drift). Returns GO/NO-GO evidence."""
-    ts = _ts(False)
-    diag = ts.diagnose(
-        "pre-deployment preflight check before azd up",
-        accelerator=accelerator,
-        overrides={"all_regions": True},
-        only_checks=[
-            "repo.azd_env",
-            "repo.config_drift",
-            "repo.git_changes",
-            "az.context",
-            "providers.registration",
-            "quota.models",
-            "models.availability",
-        ],
-    )
-    return render_markdown(diag.to_dict())
+def preflight(accelerator: Optional[str] = None, region: Optional[str] = None) -> str:
+    """Pre-deployment check (login, providers, quota in all allowed regions, model availability, config drift).
+    Returns a GO / NO-GO verdict with a recommended region."""
+    return _cli(["preflight", *_common(accelerator, None, region)])
 
 
 @mcp.tool()
 def list_checks() -> str:
     """List available diagnostic checks and the issue stages they cover."""
-    return json.dumps(
-        {cid: {"title": s.title, "stages": s.stages, "needs_azure": s.needs_azure} for cid, s in CHECKS.items()},
-        indent=2,
-    )
+    return _cli(["checks"], timeout=120)
 
 
 def main() -> None:

@@ -481,6 +481,75 @@ def test_parallel_checks_keep_their_own_commands_and_order(synthetic_fixture, sy
     assert len(by_id["webapp.state"].commands) == 5  # 4 x show + 1 settings read, gathered from helper threads
 
 
+def test_other_resource_group_ignores_the_azd_env_and_discovers_from_azure(synthetic_fixture, synthetic_env_file):
+    """azd env says rg-demo; the user asks about rg-other. Names/URLs/capacities of rg-demo must not leak in."""
+    import json as _json
+
+    text = _json.dumps(synthetic_fixture).replace("rg-demo", "rg-other")
+    fx = _json.loads(text)
+    fx["commands"]["cognitiveservices account list --resource-group rg-other"] = {
+        "exit_code": 0,
+        "stdout": [{"name": "aif-demo", "location": "swedencentral"}],
+    }
+    # Poison the azd env values that would be wrongly reused: a different app name and URL.
+    env_text = open(synthetic_env_file, encoding="utf-8").read().replace("api-chat-demo", "api-chat-WRONG")
+    from pathlib import Path as _P
+
+    wrong_env = _P(synthetic_env_file).with_name("wrong.env")
+    wrong_env.write_text(env_text, encoding="utf-8")
+    try:
+        ts = Troubleshooter(REPO_ROOT, ReplayRunner(fx))
+        d = ts.diagnose(
+            "check my deployment",
+            env_file=str(wrong_env),
+            overrides={"resource_group": "rg-other"},
+            full=True,
+            log=False,
+        )
+    finally:
+        wrong_env.unlink()
+    assert d.targets["resource_group"] == "rg-other"
+    assert d.targets["ai_region"] == "swedencentral"  # derived from the AI account in that group
+    azd = next(c for c in d.checks if c.check_id == "repo.azd_env")
+    assert azd.status == "info" and "not the current azd environment" in azd.summary
+    apps = next(c for c in d.checks if c.check_id == "webapp.state")
+    assert apps.status == "pass" and "api-chat-WRONG" not in str(apps.evidence)  # real app found by discovery
+
+
+def test_prompt_files_are_valid_slash_commands():
+    """Every sample-question prompt names the real agent, only uses real tools and has the frontmatter VS Code needs."""
+    import re as _re
+
+    prompts = sorted((REPO_ROOT / ".github" / "prompts").glob("*.prompt.md"))
+    assert {p.stem.replace(".prompt", "") for p in prompts} >= {
+        "health-check",
+        "preflight",
+        "why-is-this-failing",
+        "check-resource-group",
+        "quota-check",
+        "search-the-docs",
+    }
+    tools = {
+        "health_check",
+        "diagnose",
+        "preflight",
+        "quota_check",
+        "search_docs",
+        "identify_accelerator",
+        "list_checks",
+    }
+    for p in prompts:
+        text = p.read_text(encoding="utf-8")
+        front = _re.match(r"^---\n(.*?)\n---\n", text, _re.S)
+        assert front, p.name
+        fm = front.group(1)
+        assert 'agent: "accelerator-troubleshooter"' in fm and "description:" in fm and "argument-hint:" in fm
+        used = set(_re.findall(r"`(\w+)` tool", text)) | set(_re.findall(r"with the `(\w+)`", text))
+        assert used <= tools, (p.name, used - tools)
+    agent = (REPO_ROOT / ".github" / "agents" / "accelerator-troubleshooter.agent.md").read_text(encoding="utf-8")
+    assert "argument-hint:" in agent and "Report the tool's labels exactly" in agent
+
+
 def test_empty_resource_group_is_not_called_a_failure(synthetic_fixture, synthetic_env_file):
     fx = _fixture(
         synthetic_fixture,

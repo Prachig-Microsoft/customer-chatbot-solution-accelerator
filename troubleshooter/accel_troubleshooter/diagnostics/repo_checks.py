@@ -86,6 +86,15 @@ def effective_model_requirements(ctx: DiagContext) -> List[Dict[str, Any]]:
 @check("repo.azd_env", "azd environment present and complete", stages=["*"], needs_azure=False, order=1)
 def azd_env(ctx: DiagContext) -> CheckResult:
     keys = ctx.profile.get("azd_env_keys", {})
+    if ctx.overrides.get("foreign_env"):
+        return CheckResult(
+            "repo.azd_env",
+            "azd environment present and complete",
+            INFO,
+            f"Checking resource group '{ctx.resource_group}', which is not the current azd environment "
+            f"('{ctx.overrides['foreign_env']}'). Its settings were ignored; everything below comes from Azure.",
+            evidence={"foreign_env": ctx.overrides["foreign_env"], "resource_group": ctx.resource_group},
+        )
     iac_cfg = ctx.profile.get("iac", {})
     param_for = {"ai_location": iac_cfg.get("ai_location_param"), "location": iac_cfg.get("location_param")}
 

@@ -149,6 +149,16 @@
     "**/*.pyc": true
   },
 
+  // Troubleshooter: show these prompts as one-click suggestions when a new chat starts
+  "chat.promptFilesRecommendations": {
+    "health-check": true,
+    "preflight": true,
+    "why-is-this-failing": true,
+    "check-resource-group": true,
+    "quota-check": true,
+    "search-the-docs": true
+  },
+
   // Workspace Trust
   "security.workspace.trust.untrustedFiles": "open",
 

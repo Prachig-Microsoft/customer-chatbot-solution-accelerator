@@ -1,4 +1,7 @@
 import asyncio
+import os
+import re
+import subprocess
 import sys
 
 import pytest
@@ -6,6 +9,53 @@ import pytest
 from conftest import TOOL_ROOT
 
 mcp = pytest.importorskip("mcp")
+
+
+def test_mcp_tools_run_the_cli_in_a_fresh_process_so_chat_equals_terminal(tmp_path):
+    """The root cause of 'chat and terminal disagree' was a long-lived server running old code."""
+    src = (TOOL_ROOT / "accel_troubleshooter" / "mcp_server.py").read_text(encoding="utf-8")
+    assert "subprocess.run" in src and '"-m", "accel_troubleshooter"' in src
+    assert "from .engine" not in src and "Troubleshooter(" not in src  # no in-process engine that could go stale
+    assert "health_check" in src and "resource_group" in src
+
+
+def test_mcp_health_tool_matches_the_cli_output_exactly(synthetic_env_file):
+    from accel_troubleshooter import mcp_server
+
+    args = [
+        "diagnose",
+        "chat returns 500 errors",
+        "--no-prompt",
+        "--format",
+        "full",
+        "--env-file",
+        synthetic_env_file,
+        "--replay",
+        str(TOOL_ROOT / "evals" / "fixtures" / "synthetic-base.json"),
+    ]
+    via_tool = mcp_server._cli(args)
+    direct = subprocess.run(
+        [sys.executable, "-m", "accel_troubleshooter", *args],
+        cwd=TOOL_ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        stdin=subprocess.DEVNULL,
+        env={**os.environ, "NO_COLOR": "1", "PYTHONIOENCODING": "utf-8"},
+    ).stdout.strip()
+
+    def strip(text):  # run ids and timings legitimately differ between two runs
+        return re.sub(r"`[0-9a-f]{12}`|Generated [^\n]*|\| \d+ ms|\d{4}-\d\d-\d\dT[\d:]+Z", "", text)
+
+    assert strip(via_tool) == strip(direct) and "Troubleshooting report" in via_tool
+
+
+def test_mcp_common_args_pass_resource_group_and_never_prompt():
+    from accel_troubleshooter.mcp_server import _common
+
+    a = _common(None, "rg-other", "swedencentral", None, None, False)
+    assert "--no-prompt" in a and a[a.index("--resource-group") + 1] == "rg-other"
+    assert a[a.index("--region") + 1] == "swedencentral" and "--offline" not in a
 
 
 def test_mcp_config_does_not_depend_on_variable_expansion_or_cwd():
