@@ -279,7 +279,10 @@ def render_preflight(d: Dict[str, Any], plain: bool = False) -> str:
     else:
         for act in sorted(d.get("actions", {}).values(), key=lambda x: _CAT_ORDER[x["category"]])[:2]:
             runnable = act["category"] in (READ_ONLY, APPROVAL_REQUIRED) and act["commands"]
-            steps.append(_t(act["commands"][0], 100) if runnable else f"{act['title']} (manual; see --format full)")
+            cmd = act["commands"][0] if runnable else ""
+            if act["id"].split("#")[0] == "set-ai-region" and region and act["params"].get("env"):
+                cmd = f"azd env set {act['params']['env']} {region}"  # same region as the recommendation above
+            steps.append(_t(cmd, 100) if runnable else f"{act['title']} (manual; see --format full)")
         steps.append("fix the blockers above, then run preflight again")
     out += [f"  ▶ Next: {steps[0]}"] + [f"      ▶ {s}" for s in steps[1:]]
     return _finish("\n".join(out), plain)
@@ -374,6 +377,14 @@ def render_compact(d: Dict[str, Any], kind: str = "diagnose", plain: bool = Fals
 
     missing = d.get("missing_evidence", [])
     if kind == "diagnose" and not (top and top["status"] in ("confirmed", "likely")):
+        close = [
+            x
+            for x in d.get("docs", [])
+            if x.get("doc_type") == "troubleshooting-row" and x.get("category") != "summary" and x.get("score", 0) >= 15
+        ][:3]
+        if close:
+            out += ["", "CLOSEST DOCS (keyword match, not a diagnosis)"]
+            out += [f"  • {_t(x['title'], 70)}  ↳ {x['ref']}" for x in close]
         issue = d.get("issue") or {}
         raw = str(issue.get("raw_text") or "")
         terms = (issue.get("error_codes") or [None])[0] or (

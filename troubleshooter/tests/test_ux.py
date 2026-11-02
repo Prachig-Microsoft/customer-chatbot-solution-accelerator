@@ -231,6 +231,43 @@ def test_arm_quota_failure_uses_the_numbers_in_azures_own_error(synthetic_fixtur
     assert "[confirmed · high" in shown
 
 
+def test_failure_inside_a_still_running_deployment_is_reported_immediately(synthetic_fixture, synthetic_env_file):
+    """azd up in progress: ARM keeps the deployment 'Running' although one resource already failed."""
+    msg = "The deployment requires 5000 quota units, but only 338 quota units are available in gpt-5.4-mini."
+    ops = [
+        {"properties": {"provisioningState": "Succeeded", "timestamp": _now_iso(2)}},
+        {"properties": {"provisioningState": "Running", "timestamp": _now_iso(1)}},
+        {
+            "properties": {
+                "provisioningState": "Failed",
+                "timestamp": _now_iso(1),
+                "targetResource": {
+                    "resourceType": "Microsoft.CognitiveServices/accounts/deployments",
+                    "resourceName": "gpt",
+                },
+                "statusMessage": {"error": {"code": "InsufficientQuota", "message": msg}},
+            }
+        },
+    ]
+    fx = _fixture(
+        synthetic_fixture,
+        **{
+            "deployment group list --resource-group rg-demo": {
+                "exit_code": 0,
+                "stdout": [{"name": "main", "properties": {"provisioningState": "Running", "timestamp": _now_iso(3)}}],
+            },
+            "deployment operation group list --resource-group rg-demo --name main": {"exit_code": 0, "stdout": ops},
+        },
+    )
+    ts = Troubleshooter(REPO_ROOT, ReplayRunner(fx))
+    d = ts.diagnose("azd up in progress", env_file=synthetic_env_file, log=False)
+    ev = next(c for c in d.checks if c.check_id == "deploy.operations")
+    assert ev.status == "fail" and "already failed" in ev.summary and "InsufficientQuota" in ev.summary
+    assert ev.evidence["progress"] == {"succeeded": 1, "running": 1, "failed": 1}
+    assert d.hypotheses[0].id == "quota-insufficient" and d.hypotheses[0].status == "confirmed"
+    assert not any(h.id == "deployment-in-progress" for h in d.hypotheses)  # "not a failure yet" would be wrong
+
+
 def test_policy_enforced_public_access_is_confirmed_on_non_waf_and_waf_is_only_an_alternative(
     synthetic_fixture, synthetic_env_file
 ):

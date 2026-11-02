@@ -18,7 +18,7 @@ from typing import Any, Callable, Dict, List, Tuple
 from .actions import build_action
 from .diagnostics.base import DiagContext
 from .models import CONFIRMED, FAIL, LIKELY, POSSIBLE, Action, Hypothesis
-from .repo import template_sets_tag
+from .repo import parse_bicep_params, parse_parameters_env_map, template_sets_tag
 
 Rule = Callable[[DiagContext], List[Tuple[Hypothesis, List[Action]]]]
 RULES: List[Tuple[int, Rule]] = []
@@ -100,8 +100,32 @@ def subscription_mismatch(ctx):
 
 @rule(3)
 def rg_not_found(ctx):
+    reported = {c.lower() for c in ctx.issue.error_codes}
     if ctx.facts.get("rg_exists") is not False:
-        return []
+        if "resourcegroupnotfound" not in reported or ctx.facts.get("rg_exists") is True:
+            return []
+        # Reported by the user but not verified live (offline, or no resource group known): cite the guide only.
+        ref = _ts_ref(ctx, "ResourceGroupNotFound")
+        a = build_action("new-azd-env", ctx.profile, doc_refs=[ref])
+        return [
+            (
+                Hypothesis(
+                    "resource-group-missing",
+                    "Resource group does not exist (deleted, or a stale azd environment / old .env file)",
+                    LIKELY,
+                    "medium",
+                    [
+                        "the error code ResourceGroupNotFound was reported",
+                        f"troubleshooting guide: caused by a deleted resource group or an old .env file ({ref})",
+                    ],
+                    missing_evidence=["live check: 'az group show' for the resource group (needs Azure access)"],
+                    doc_refs=[ref, ctx.ref("deployment", "Recover from Failed")],
+                    remediation_ids=[a.id],
+                    component="Resource group / azd environment",
+                ),
+                [a],
+            )
+        ]
     rg = ctx.resource_group
     src = ctx.resource_group_source
     rationale = [
@@ -164,6 +188,11 @@ def _arm_quota_failures(ctx) -> List[Dict[str, Any]]:
 
 @rule(10)
 def quota_insufficient(ctx):
+    raw_lower = ctx.issue.raw_text.lower()
+    if re.search(r"\b(vms?|vcpus?|cores?)\b", raw_lower) and not re.search(
+        r"tokens|tpm|openai|gpt|embedding|foundry|capacity", raw_lower
+    ):
+        return []  # VM/core quota (documented separately), not model quota
     reported, observed = _codes(ctx)
     arm = _arm_quota_failures(ctx)
     target = ctx.facts.get("quota_target_region")
@@ -361,6 +390,66 @@ def model_unsupported(ctx):
     ]
 
 
+_ALLOWED_VALUE = [
+    re.compile(r"provided value '([^']*)' for the template parameter '(\w+)'", re.I),
+    re.compile(r"template parameter '(\w+)'[^\n]{0,200}?'([\w.-]+)' is not in the allowed", re.I),
+]
+
+
+@rule(12)
+def parameter_not_allowed(ctx):
+    """'The provided value X for the template parameter P is not valid': compare with the Bicep @allowed list."""
+    pname = value = None
+    for i, rx in enumerate(_ALLOWED_VALUE):
+        m = rx.search(ctx.issue.raw_text)
+        if m:
+            value, pname = (m.group(1), m.group(2)) if i == 0 else (m.group(2), m.group(1))
+            break
+    if not pname:
+        return []
+    iac = ctx.profile.get("iac", {})
+    params = parse_bicep_params(ctx.repo / iac.get("main", "infra/main.bicep"))
+    p = params.get(pname)
+    if p is None or not p.allowed or value in p.allowed:
+        return []
+    env_map = parse_parameters_env_map(ctx.repo / iac.get("parameters", "infra/main.parameters.json"))
+    envvar = (env_map.get(pname) or {}).get("env")
+    ref = f"{iac.get('main', 'infra/main.bicep')}:{p.line}"
+    cmd = (
+        f"azd env set {envvar} <one of: {', '.join(p.allowed)}>"
+        if envvar
+        else f"change {pname} to one of: {', '.join(p.allowed)}"
+    )
+    a = build_action(
+        "follow-documented-steps",
+        ctx.profile,
+        code="InvalidTemplate",
+        commands=[cmd],
+        doc_refs=[ref],
+    )
+    return [
+        (
+            Hypothesis(
+                "parameter-not-allowed",
+                f"'{value}' is not an allowed value for template parameter '{pname}'",
+                CONFIRMED,
+                "high",
+                [
+                    f"the error names parameter '{pname}' with value '{value}'",
+                    f"{ref} restricts it with @allowed to: {', '.join(p.allowed)}",
+                    f"'{value}' is not in that list"
+                    + (f"; the value comes from the azd environment variable {envvar}" if envvar else ""),
+                ],
+                doc_refs=[ref, ctx.ref("troubleshooting", "InvalidResourceLocation")],
+                source_refs=[ref],
+                remediation_ids=[a.id],
+                component="Template parameters / azd environment",
+            ),
+            [a],
+        )
+    ]
+
+
 @rule(12)
 def providers_unregistered(ctx):
     missing = ctx.facts.get("unregistered_providers") or []
@@ -394,6 +483,34 @@ def providers_unregistered(ctx):
 # --------------------------------------------------------------------------- ARM deployment
 
 
+def _words(text: str) -> set:
+    return set(re.findall(r"[a-z]{4,}", text.lower()))
+
+
+def _best_row(ctx: DiagContext, code: str):
+    """The documented row for an error code. Generic codes (BadRequest, Unauthorized) have many rows: prefer the one
+    whose title/section shares the most words with what the user pasted."""
+    hits = ctx.index.search(code, k=10, error_codes=[code], doc_types=["troubleshooting-row"])
+    hits = [h for h in hits if any(code in c.lower() for c in h.error_codes)]
+    if len(hits) <= 1:
+        return hits[0] if hits else None
+    pasted = _words(ctx.issue.raw_text)
+    return max(hits, key=lambda h: (len(pasted & _words(h.title + " " + h.section)), h.score))
+
+
+def _phrase_rows(ctx: DiagContext, skip: set):
+    """Rows whose long, plain-language title appears in the pasted text (no machine error code needed)."""
+    text = _words(ctx.issue.raw_text)
+    out = []
+    for p in ctx.index.passages:
+        if p.doc_type != "troubleshooting-row" or p.category == "summary" or p.ref in skip:
+            continue
+        title = _words(p.title)
+        if len(title) >= 5 and len(title & text) >= max(5, int(0.85 * len(title))):
+            out.append(p)
+    return out
+
+
 @rule(20)
 def documented_deployment_errors(ctx):
     reported, observed = _codes(ctx)
@@ -401,12 +518,14 @@ def documented_deployment_errors(ctx):
     out = []
     if ctx.index is None:
         return out
+    rows = []
     for code in sorted((observed | reported) - handled):
-        hits = ctx.index.search(code, k=1, error_codes=[code], doc_types=["troubleshooting-row"])
-        hits = [h for h in hits if any(code in c.lower() for c in h.error_codes)]
-        if not hits:
-            continue
-        row = hits[0]
+        row = _best_row(ctx, code)
+        if row is not None and all(row.ref != r[1].ref for r in rows):
+            rows.append((code, row))
+    seen = {r.ref for _, r in rows}
+    rows += [(p.title.lower(), p) for p in _phrase_rows(ctx, seen)]
+    for code, row in rows:
         live = code in observed
         detail = next((e for e in ctx.facts.get("deployment_errors", []) if (e.get("code") or "").lower() == code), {})
         rationale = [f"error code '{row.title}' matches documented entry {row.ref} ({row.section})"]
@@ -440,6 +559,8 @@ def documented_deployment_errors(ctx):
 
 @rule(21)
 def deployment_running(ctx):
+    if ctx.facts.get("failed_while_running"):
+        return []  # an operation already failed: the failure rules explain it, "not a failure yet" would be wrong
     stuck = ctx.facts.get("stuck_deployments") or []
     running = ctx.facts.get("running_deployments") or []
     recent = ctx.facts.get("deployment_recent_minutes")

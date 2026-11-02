@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -579,6 +581,69 @@ def cmd_eval(args) -> int:
     return EXIT_OK if result["passed"] == result["total"] else EXIT_FINDINGS
 
 
+def _minutes_ago(iso: str):
+    from datetime import datetime, timezone
+
+    try:
+        return (datetime.now(timezone.utc) - datetime.fromisoformat(iso.replace("Z", "+00:00"))).total_seconds() / 60
+    except (AttributeError, ValueError):
+        return None
+
+
+def cmd_watch(args) -> int:
+    """Follow a deployment started in another terminal: one line per change, a full diagnosis at the first failure."""
+    ts = _ts(args)
+    only = ["rg.state", "deploy.operations", "resources.state"]
+    started, last, tick, seen_running = time.time(), "", 0, False
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    print("Watching the deployment (read-only, Ctrl+C to stop). Start `azd up` in the other terminal.")
+    try:
+        while time.time() - started < args.timeout * 60:
+            diag = _diagnose(ts, args, "azd up in progress", only_checks=only)
+            if tick == 0:  # keep the group the user typed at the prompt and never prompt again
+                args.resource_group = diag.targets.get("resource_group") or getattr(args, "resource_group", None)
+                args.no_prompt = True
+            tick += 1
+            by = {c.check_id: c for c in diag.checks}
+            ops, res, rg = by.get("deploy.operations"), by.get("resources.state"), by.get("rg.state")
+            clock = time.strftime("%H:%M:%S")
+            if ops is not None and ops.status == "fail":
+                print(f"[{clock}] ❌ {ops.summary}\n")
+                _emit(args, diag.to_dict())
+                print("\nazd stops at the first failed step. Fix the cause above, then run `azd up` again.")
+                return EXIT_FINDINGS
+            if rg is not None and rg.status == "fail":
+                line = f"⏳ waiting for azd to create the resource group {diag.targets.get('resource_group')}"
+            elif ops is None or ops.status in ("skip", "error"):
+                line = f"⚠️  cannot read deployments: {ops.summary if ops else 'no data'}"
+            elif ops.status == "warn":
+                seen_running = True
+                line = f"⏳ {ops.summary} {res.summary if res else ''}".strip()
+            else:
+                recent = (ops.evidence.get("recent_deployments") or [{}])[0].get("timestamp")
+                age = _minutes_ago(recent) if recent else None
+                if ops.status == "pass" and (seen_running or (age is not None and age < 5)):
+                    print(f"[{clock}] ✅ Deployment finished: {ops.summary}")
+                    print(
+                        "Next: run the post-provision steps from the deployment guide (build images, data and "
+                        "agents), then `python -m accel_troubleshooter health`."
+                    )
+                    return EXIT_OK
+                line = "⏳ waiting for `azd up` to start" + (
+                    f" (last deployment finished {age:.0f} min ago)" if age else ""
+                )
+            shown = re.sub(r"\d+", "#", line)
+            if shown != last or tick % 8 == 0:
+                print(f"[{clock}] {line}", flush=True)
+                last = shown
+            time.sleep(args.interval)
+    except KeyboardInterrupt:
+        print("\nStopped watching.")
+        return EXIT_OK
+    print(f"Stopped after {args.timeout} minutes without a result.")
+    return EXIT_FINDINGS
+
+
 def cmd_about(args) -> int:
     """What is this accelerator? Name, short description from its README, services, docs and repo."""
     from .about import build_about, render_about
@@ -762,6 +827,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     st = sub.add_parser("stats", help="Operational statistics from the run log")
     st.set_defaults(func=cmd_stats)
+
+    wt = sub.add_parser("watch", help="Follow a deployment started in another terminal; diagnose at the first failure")
+    common(wt)
+    wt.add_argument("--interval", type=int, default=30, help="Seconds between checks (default 30)")
+    wt.add_argument("--timeout", type=int, default=90, help="Stop after this many minutes (default 90)")
+    wt.set_defaults(func=cmd_watch)
 
     ab = sub.add_parser("about", help="What is this accelerator? Short description from its README, services, docs")
     common(ab, live=False)

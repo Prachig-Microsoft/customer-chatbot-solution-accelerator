@@ -360,11 +360,13 @@ def config_drift(ctx: DiagContext) -> CheckResult:
     ctx.facts["drift_findings"] = findings
     sev = {f["severity"] for f in findings}
     status = FAIL if "high" in sev else WARN if sev & {"medium"} else INFO if findings else PASS
-    summary = (
-        f"{len(findings)} consistency finding(s)."
-        if findings
-        else "IaC, docs, quota scripts and azd env are consistent."
-    )
+    highs = [f for f in findings if f["severity"] == "high"]
+    if highs:  # name the blocker instead of only counting findings
+        summary = highs[0]["message"] + (f" (+{len(findings) - 1} more finding(s))" if len(findings) > 1 else "")
+    elif findings:
+        summary = f"{len(findings)} consistency finding(s)."
+    else:
+        summary = "IaC, docs, quota scripts and azd env are consistent."
     return CheckResult(
         "repo.config_drift",
         "IaC vs docs vs scripts vs azd env consistency",

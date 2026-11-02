@@ -233,6 +233,20 @@ def deploy_operations(ctx: DiagContext) -> CheckResult:
             for e in _op_errors(ops):
                 e["deployment"] = d["name"]
                 errors.append(e)
+    # A deployment that is still running can already contain failed operations (azd up in progress): read those too.
+    progress = {"succeeded": 0, "running": 0, "failed": 0}
+    for d in running[:6]:
+        ok, ops, _ = ctx.az("deployment", "operation", "group", "list", "--resource-group", rg, "--name", d["name"])
+        if not ok:
+            continue
+        for op in ops or []:
+            state = str((op.get("properties") or {}).get("provisioningState") or "").lower()
+            if state in progress:
+                progress[state] += 1
+        for e in _op_errors(ops):
+            e["deployment"] = d["name"]
+            if not any(x.get("resource_name") == e["resource_name"] and x.get("code") == e["code"] for x in errors):
+                errors.append(e)
     codes = sorted({e["code"] for e in errors if e.get("code") and e["code"] != "DeploymentFailed"})
     # ARM leaves brief gaps between phases where nothing is "Running"; very recent activity still means "in progress".
     recent_min = None
@@ -249,7 +263,7 @@ def deploy_operations(ctx: DiagContext) -> CheckResult:
         deployments=summary,
         deployment_recent_minutes=recent_min,
     )
-    ev = {"recent_deployments": summary, "failed_operations": errors[:15]}
+    ev = {"recent_deployments": summary, "failed_operations": errors[:15], "progress": progress}
     if running:
         now = datetime.now(timezone.utc)
         stuck = []
@@ -261,11 +275,26 @@ def deploy_operations(ctx: DiagContext) -> CheckResult:
             except (AttributeError, ValueError):
                 pass
         ctx.facts["stuck_deployments"] = stuck
+        if errors:
+            ctx.facts["failed_while_running"] = True
+            names = ", ".join(sorted({f"{e.get('resource_name')} ({e.get('code')})" for e in errors})[:4])
+            return CheckResult(
+                "deploy.operations",
+                title,
+                FAIL,
+                f"Deployment still running, but {len(errors)} operation(s) already failed: {names}.",
+                evidence=ev,
+            )
+        done = (
+            f" ({progress['succeeded']} operations done, {progress['running']} running)"
+            if progress["succeeded"]
+            else ""
+        )
         return CheckResult(
             "deploy.operations",
             title,
             WARN if not stuck else FAIL,
-            f"{len(running)} deployment(s) still running" + (f"; {stuck} running > 1h" if stuck else "."),
+            f"{len(running)} deployment(s) still running" + (f"; {stuck} running > 1h" if stuck else ".") + done,
             evidence=ev,
         )
     if not deps:
@@ -499,7 +528,8 @@ def quota_models(ctx: DiagContext) -> CheckResult:
             )
         ctx.facts["quota_ok"] = False
         short = [
-            f"{m['model']} ({m['sku']}): need {m['capacity']}, available {m['available']}"
+            f"{m['model']} ({m['sku']}): need {m['capacity']}, "
+            + (f"available {m['available']}" if m["available"] is not None else f"not offered in {target}")
             for m in t.get("models", [])
             if not m["ok"]
         ]

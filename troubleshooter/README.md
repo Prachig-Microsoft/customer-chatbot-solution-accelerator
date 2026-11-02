@@ -31,6 +31,8 @@ python -m accel_troubleshooter diagnose --last               # output of the las
 Get-Content deploy.log | python -m accel_troubleshooter diagnose -      # stdin
 
 python -m accel_troubleshooter health                        # full read-only health check of the current azd env
+python -m accel_troubleshooter watch                         # follow `azd up` running in ANOTHER terminal; diagnoses at the first failure
+python -m accel_troubleshooter about                         # what is this accelerator (description from its README)
 python -m accel_troubleshooter quota                         # quota table for every allowed AI region
 python -m accel_troubleshooter search "InsufficientQuota"    # cited doc retrieval
 python -m accel_troubleshooter eval                          # regression / evaluation suite (no Azure needed)
@@ -269,6 +271,32 @@ Manual alternative: copy the `troubleshooter/` folder and the files above by han
 
 `preflight` prints **NOT CHECKED** (exit code 3), never GO, when no live quota check could run (offline, not logged
 in, or the repo could not be found).
+
+## Test it end to end (five scenarios taken from the troubleshooting guide)
+
+Each scenario can be reproduced safely and each is documented in `documents/TroubleShootingSteps.md`. Run them from
+`troubleshooter/`; to try a bad value **without touching your azd environment**, put it in a throwaway file and pass
+`--env-file` (for example `AZURE_ENV_GPT_MODEL_CAPACITY="5000"`).
+
+| # | Scenario (guide entry) | How to manufacture it | What the agent should say |
+|---|---|---|---|
+| 1 | Quota too high (`InsufficientQuota`, Quota & Capacity) | `azd env set AZURE_ENV_GPT_MODEL_CAPACITY 5000`, then `preflight`; optionally `azd up` (it fails at validation, nothing is created) | NO-GO before deploying, with `need 5000 / free <n>`; after a failed `azd up`, a confirmed cause using the numbers from Azure's own error |
+| 2 | Deleted or stale resource group (`ResourceGroupNotFound`) | run `health` with an azd env whose resource group was deleted; or paste `ResourceGroupNotFound: Resource group 'rg-x' could not be found.` | confirmed (live) or likely (pasted only), cites the guide row, suggests a new azd env |
+| 3 | Model version not offered in the region (`DeploymentModelNotSupported`, Regional) | `azd env set AZURE_ENV_GPT_MODEL_VERSION 2099-01-01`, then `preflight` | NO-GO: version not offered in the region, lists the versions that are |
+| 4 | Parameter value not allowed (`InvalidTemplate`, Regional/Config) | `azd env set AZURE_ENV_AI_SERVICE_LOCATION westus`, then `preflight`; or paste `The provided value 'westus' for the template parameter 'azureAiServiceLocation' ... is not valid` | the region is not in the Bicep `@allowed` list (file:line), and the command to fix it |
+| 5 | Post-deployment steps skipped / app stopped (Deployment Guide 5.3) | after `azd up`, do not run the image build and data/agents scripts, then run `health`; or `az webapp stop` the API app | placeholder images / missing agent settings named with the script to run; a stopped app gets an approval-gated `start-webapp` fix |
+
+Also worth trying: paste any error code from the guide's "Most frequently encountered errors" table; the agent matches
+the guide's own row and shows its steps, and when the guide has no entry it says so and links external searches.
+
+**Preflight to post-deployment in two terminals**
+
+1. Terminal A: `python -m accel_troubleshooter preflight` (GO or NO-GO, recommended region, blockers).
+2. Terminal B: `azd up` (or `python -m accel_troubleshooter run -- azd up` to diagnose automatically on failure).
+3. Terminal A: `python -m accel_troubleshooter watch`. It prints one line per change and stops with a full diagnosis at
+   the first failed operation, even while ARM still reports the deployment as running.
+4. Terminal B: the post-provision scripts from the deployment guide (build images, data and agents).
+5. Terminal A: `python -m accel_troubleshooter health`; chat works the same way (`/preflight`, `/health-check`).
 
 ## Demo scenarios (all reversible, all verified live on a real deployment)
 
