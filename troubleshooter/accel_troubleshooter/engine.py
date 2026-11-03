@@ -30,8 +30,12 @@ NEEDS_RG = {
     "webapp.health",
     "rbac.app_identity",
     "rbac.deployer_data",
+    "appinsights.errors",
+    "chat.e2e",
 }
 DEPENDS = {
+    "appinsights.errors": ["rg.state", "resources.state", "az.context"],
+    "chat.e2e": ["rg.state", "resources.state", "webapp.state"],
     "rbac.app_identity": ["webapp.state"],
     "webapp.health": ["webapp.state"],
     "config.compare": ["webapp.state"],
@@ -123,11 +127,11 @@ class Troubleshooter:
         if only:
             selected = set(only)
         elif full or not issue.stages:
-            selected = set(CHECKS)
+            selected = {c for c, s in CHECKS.items() if not s.opt_in}
         else:
             selected = set(ALWAYS)
             for cid, spec in CHECKS.items():
-                if "*" in spec.stages or set(spec.stages) & set(issue.stages):
+                if not spec.opt_in and ("*" in spec.stages or set(spec.stages) & set(issue.stages)):
                     selected.add(cid)
         changed = True
         while changed:
@@ -137,7 +141,7 @@ class Troubleshooter:
                     if dep not in selected:
                         selected.add(dep)
                         changed = True
-        return sorted(selected, key=lambda c: CHECKS[c].order)
+        return sorted(selected, key=lambda c: (CHECKS[c].order, c))
 
     def run_waves(self, planned: List[str], ctx: DiagContext, workers: int = 6) -> None:
         """Run checks level by level (a check waits for the checks it depends on); checks on one level run in parallel.
@@ -202,6 +206,7 @@ class Troubleshooter:
             upstream=profile.get("upstream_repo"),
             profile=profile.get("_profile_file"),
             diagnostics_level=profile.get("diagnostics"),
+            chat_test=bool(profile.get("chat_test")),
         )
         if repo is None:
             diag.limitations.append(

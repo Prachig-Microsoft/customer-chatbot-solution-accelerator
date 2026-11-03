@@ -22,19 +22,21 @@ in the Sources block at the very bottom.
 
 **What passed**
 - one short bullet per area (login and providers, resource group, quota and models, model deployments, apps and health
-  probes, RBAC, config match).
+  probes, app error logs, RBAC, config match).
 
 **Still unverified**
 - what the checks cannot prove (for example a real signed-in chat message), and any finding the report did not detail.
 
 **Next step:** one line with the smallest safe action and its category (🟢 read-only, 🟡 needs approval, 📘 manual,
-🔴 restricted).
+🔴 restricted). When everything looks healthy but the report says a real chat reply is "Not proven yet", the next step
+is the 🟡 real chat test: ask "Send one real test chat message with your sign-in (one model call, the test session is
+deleted afterwards)? yes / no" and call `chat_test` with `user_approved=true` only after yes.
 
 Ask next: two or three follow-ups.
 
 **Sources** (always last, one line each, so the answer above stays easy to read)
 - 🔬 live checks used: the check ids and the Azure CLI command each ran (for example `network.public_access`
-  - `az cosmosdb show`).
+  - `az cosmosdb show`; `appinsights.errors` for what the apps logged; `chat.e2e` for a real chat message).
 - 📘 accelerator docs / IaC cited: `path:line`.
 - 🌐 external: URLs, only if you used any (mark "not from the accelerator docs").
 

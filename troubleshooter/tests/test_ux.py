@@ -592,6 +592,9 @@ def test_skills_are_valid_slash_commands():
         "identify_accelerator",
         "list_checks",
         "apply_fix",
+        "chat_test",
+        "doc_drift",
+        "draft_guide_entry",
     }
     for folder, p in skills.items():
         text = p.read_text(encoding="utf-8")
@@ -610,6 +613,9 @@ def test_skills_are_valid_slash_commands():
     agent = (REPO_ROOT / ".github" / "agents" / "accelerator-troubleshooter.agent.md").read_text(encoding="utf-8")
     assert "argument-hint:" in agent and "Report the tool's labels exactly" in agent
     assert agent.count("agent: accelerator-troubleshooter") >= 4 and "handoffs:" in agent  # clickable starter questions
+    for tool in ("chat_test", "doc_drift", "draft_guide_entry", "apply_fix"):
+        assert f"`{tool}`" in agent, tool  # every action-capable tool is described, with its approval rule
+    assert "user_approved=true" in agent and "sign-in token" in agent
 
 
 def test_empty_resource_group_is_not_called_a_failure(synthetic_fixture, synthetic_env_file):

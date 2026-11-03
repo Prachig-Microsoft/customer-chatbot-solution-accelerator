@@ -6,9 +6,10 @@ Every tool runs the real CLI (``python -m accel_troubleshooter ...``) in a **fre
 terminal use exactly the same code and give the same findings, and a long-lived server can never serve stale code
 after the troubleshooter is updated.
 
-Remediation: read-only tools never change anything. The one state-changing tool, ``apply_fix``, refuses unless the
-caller passes ``user_approved=true`` (the agent instructions allow that only after the user said yes to the shown
-change) and only runs the small allow-list in ``actions.EXECUTABLE_ACTIONS``; it then verifies and re-checks health.
+Remediation: read-only tools never change anything. Two tools act on the user's behalf and both refuse unless the caller
+passes ``user_approved=true`` (the agent instructions allow that only after the user said yes): ``apply_fix`` (runs one
+allow-listed fix, then verifies and re-checks health) and ``chat_test`` (sends one real chat message and deletes the
+test session). ``draft_guide_entry`` only prints a draft; it never edits the guide.
 """
 
 from __future__ import annotations
@@ -61,6 +62,7 @@ def _common(
     env: Optional[str] = None,
     subscription: Optional[str] = None,
     offline: bool = False,
+    window: Optional[str] = None,
 ) -> List[str]:
     args = ["--no-prompt", "--format", "full"]
     for flag, value in (
@@ -69,6 +71,7 @@ def _common(
         ("--region", region),
         ("--env", env),
         ("--subscription", subscription),
+        ("--window", window),
     ):
         if value:
             args += [flag, value]
@@ -82,6 +85,57 @@ def identify_accelerator(issue: str, accelerator: Optional[str] = None) -> str:
     """Identify which Azure solution accelerator an issue belongs to. Returns a clarification question when
     identification is ambiguous — ask the user that question instead of guessing."""
     return _cli(["identify", issue] + (["--accelerator", accelerator] if accelerator else []), timeout=120)
+
+
+@mcp.tool()
+def doc_drift(accelerator: Optional[str] = None) -> str:
+    """Offline report of where the accelerator's docs and scripts disagree with its Bicep and parameter files (for
+    example a documented default capacity that differs from the template, regions or models the template does not
+    use, undocumented variables, broken links). Each finding names the file and line to edit and how. Nothing is
+    changed. Use for 'is the documentation up to date?' or before a release."""
+    return _cli(["drift", "--no-color"] + (["--accelerator", accelerator] if accelerator else []), timeout=180)
+
+
+@mcp.tool()
+def draft_guide_entry(
+    issue: str,
+    resource_group: Optional[str] = None,
+    note: Optional[str] = None,
+    accelerator: Optional[str] = None,
+    force: bool = False,
+) -> str:
+    """Draft one new row for the accelerator's troubleshooting guide from a diagnosed incident: generalised (no
+    resource names, ids or secrets), in the guide's table format, with the section and line it belongs to. It only
+    PRINTS the draft: nothing is written. If the guide already documents the problem it says so. Pass 'note' with
+    what fixed it. Show the row to the user; only if they ask you to add it, insert it at the stated line."""
+    args = ["draft-guide", issue, *_common(accelerator, resource_group, None)]
+    if note:
+        args += ["--note", note]
+    return _cli(args + (["--force"] if force else []))
+
+
+@mcp.tool()
+def chat_test(
+    user_approved: bool,
+    resource_group: Optional[str] = None,
+    client_id: Optional[str] = None,
+    accelerator: Optional[str] = None,
+    env: Optional[str] = None,
+    region: Optional[str] = None,
+    subscription: Optional[str] = None,
+) -> str:
+    """SENDS ONE REAL CHAT MESSAGE as the signed-in user to the deployed chat API (uses a little model quota and
+    writes one chat session, which it deletes afterwards), together with the full health check. It proves whether a
+    user can really get a model reply, and names where it breaks (sign-in, Cosmos DB, agents, model). Call this ONLY
+    after the user explicitly said yes in this conversation, then pass user_approved=true. client_id is the API app
+    registration's client id if it is not in the azd environment."""
+    if not user_approved:
+        return (
+            "Not sent: the user has not approved a real chat message. Ask them first (it uses their sign-in, one "
+            "model call, and the test session is deleted afterwards), then call again with user_approved=true."
+        )
+    args = ["chat-test", "--yes", *_common(accelerator, resource_group, region, env, subscription)]
+    return _cli(args + (["--client-id", client_id] if client_id else []))
 
 
 @mcp.tool()
@@ -107,11 +161,14 @@ def health_check(
     env: Optional[str] = None,
     region: Optional[str] = None,
     subscription: Optional[str] = None,
+    window: Optional[str] = None,
 ) -> str:
-    """Full read-only health check of a deployed accelerator. By default it checks the current azd environment's
-    resource group. To check a different resource group pass resource_group (and region if it is not discoverable);
-    if that group is in another subscription the user must first run 'az account set --subscription <id>'."""
-    return _cli(["health", *_common(accelerator, resource_group, region, env, subscription)])
+    """Full read-only health check of a deployed accelerator, including the errors the apps logged to Application
+    Insights (last hour; pass window such as PT15M, PT6H or P1D to change it). By default it checks the current azd
+    environment's resource group. To check a different resource group pass resource_group (and region if it is not
+    discoverable); if that group is in another subscription the user must first run
+    'az account set --subscription <id>'. It cannot prove a real chat reply: for that offer chat_test."""
+    return _cli(["health", *_common(accelerator, resource_group, region, env, subscription, window=window)])
 
 
 @mcp.tool()
@@ -124,12 +181,14 @@ def diagnose(
     full: bool = False,
     env: Optional[str] = None,
     subscription: Optional[str] = None,
+    window: Optional[str] = None,
 ) -> str:
     """Run the evidence-based diagnosis (read-only Azure CLI checks + docs + repo config) for a problem described in
     plain words (or pasted error text) and return a Markdown report with confirmed findings, likely/alternative
     causes, missing evidence, cited docs and categorized remediation (read-only / approval required / restricted).
-    resource_group defaults to the current azd environment's; pass it to investigate a different resource group."""
-    args = ["diagnose", issue, *_common(accelerator, resource_group, region, env, subscription, offline)]
+    resource_group defaults to the current azd environment's; pass it to investigate a different resource group.
+    Runtime problems also read the apps' logged errors from Application Insights (window, default PT1H)."""
+    args = ["diagnose", issue, *_common(accelerator, resource_group, region, env, subscription, offline, window)]
     return _cli(args + (["--full"] if full else []))
 
 

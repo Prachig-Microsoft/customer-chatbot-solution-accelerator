@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List
 
+from ..drift import collect_doc_drift
 from ..models import FAIL, INFO, PASS, SKIP, WARN, CheckResult
 from ..redact import is_secret_name, redact_text
 from ..repo import (
@@ -346,6 +347,8 @@ def config_drift(ctx: DiagContext) -> CheckResult:
                     }
                 )
 
+    findings += collect_doc_drift(ctx, reqs)
+
     ai_loc = ctx.env.get(ctx.env_key("ai_location")) or ctx.env.params.get(iac.get("ai_location_param", ""))
     if ai_loc and allowed_ai and ai_loc not in allowed_ai:
         findings.append(
@@ -364,7 +367,11 @@ def config_drift(ctx: DiagContext) -> CheckResult:
     if highs:  # name the blocker instead of only counting findings
         summary = highs[0]["message"] + (f" (+{len(findings) - 1} more finding(s))" if len(findings) > 1 else "")
     elif findings:
-        summary = f"{len(findings)} consistency finding(s)."
+        summary = (
+            f"{len(findings)} note(s) on docs/scripts vs the template (run `drift` for the list)."
+            if all(f["severity"] == "low" for f in findings)
+            else f"{len(findings)} consistency finding(s)."
+        )
     else:
         summary = "IaC, docs, quota scripts and azd env are consistent."
     return CheckResult(

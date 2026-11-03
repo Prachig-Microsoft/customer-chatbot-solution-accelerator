@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from ..azcli import AzRunner, CommandNotAllowed
 from ..knowledge import KnowledgeIndex
 from ..models import ERROR, SKIP, CheckResult, IssueContext
+from ..redact import redact_text
 from ..repo import AzdEnv, find_line
 
 
@@ -25,6 +26,7 @@ class CheckSpec:
     needs_apps: bool
     order: int
     description: str = ""
+    opt_in: bool = False  # sends real traffic or changes data: runs only when asked for explicitly
 
 
 CHECKS: Dict[str, CheckSpec] = {}
@@ -38,9 +40,10 @@ def check(
     needs_apps: bool = False,
     order: int = 50,
     description: str = "",
+    opt_in: bool = False,
 ):
     def deco(fn):
-        CHECKS[check_id] = CheckSpec(check_id, title, fn, stages, needs_azure, needs_apps, order, description)
+        CHECKS[check_id] = CheckSpec(check_id, title, fn, stages, needs_azure, needs_apps, order, description, opt_in)
         return fn
 
     return deco
@@ -199,7 +202,7 @@ def run_check(spec: CheckSpec, ctx: DiagContext) -> CheckResult:
                     spec.id,
                     spec.title,
                     ERROR,
-                    f"Check raised {type(e).__name__}: {e}",
+                    f"Check raised {type(e).__name__}: {redact_text(str(e))}",
                     evidence={"traceback": traceback.format_exc(limit=3)},
                 )
     finally:

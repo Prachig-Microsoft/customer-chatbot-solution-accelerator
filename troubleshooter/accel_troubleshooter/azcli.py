@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import fnmatch
+import http.client
 import json
 import re
 import shutil
@@ -59,6 +60,23 @@ READ_ONLY_PREFIXES = [
 
 ALLOWED_HTTP_HOST_SUFFIXES = (".azurewebsites.net", "localhost", "127.0.0.1")
 
+
+def _host_allowed(host: str) -> bool:
+    """Exact local hosts, or a subdomain of azurewebsites.net (no look-alike hosts such as 'evillocalhost')."""
+    return host in ("localhost", "127.0.0.1") or host.endswith(".azurewebsites.net")
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102 - returning None raises HTTPError
+        return None
+
+
+_NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirect)
+_TOKEN_SCOPE = re.compile(r"^api://[0-9a-fA-F-]{36}/[A-Za-z_.]+$")
+_ARM_COMPONENT_PATH = (
+    r"/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[\w.()-]+/providers/microsoft\.insights/components/[\w.-]+"
+)
+
 DEMO_SUBSCRIPTION = "00000000-0000-0000-0000-00000000aaaa"
 DEMO_TENANT = "00000000-0000-0000-0000-00000000bbbb"
 
@@ -100,7 +118,42 @@ def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
+def _rest_allowed(args: List[str]) -> bool:
+    """``az rest`` is generic, so allow only: --method get, to ARM Application Insights component reads or to the
+    Application Insights query API, with no body, headers or output file."""
+    if not args or args[0] != "rest":
+        return False
+    method = url = ""
+    i = 1
+    while i < len(args):
+        a = args[i]
+        if a in ("--method", "-m") and i + 1 < len(args):
+            method, i = args[i + 1].lower(), i + 2
+        elif a in ("--url", "--uri", "-u") and i + 1 < len(args):
+            url, i = args[i + 1], i + 2
+        elif a == "--uri-parameters":
+            i += 1
+            while i < len(args) and not args[i].startswith("-"):
+                i += 1
+        elif a == "--resource" and i + 1 < len(args):
+            if args[i + 1] != "https://api.applicationinsights.io":
+                return False
+            i += 2
+        else:
+            return False  # --body, --headers, --output-file, --skip-authorization-header ... never allowed
+    u = urlparse(url)
+    if method != "get" or u.scheme != "https" or u.query:
+        return False
+    if u.hostname == "management.azure.com":
+        return bool(re.fullmatch(_ARM_COMPONENT_PATH, u.path, re.I))
+    if u.hostname == "api.applicationinsights.io":
+        return bool(re.fullmatch(r"/v1/apps/[0-9a-fA-F-]{36}/query", u.path))
+    return False
+
+
 def is_read_only(args: List[str]) -> bool:
+    if args and args[0] == "rest":
+        return _rest_allowed(args)
     joined = " ".join(a for a in args if not a.startswith("-"))
     return any(joined.startswith(p) for p in READ_ONLY_PREFIXES)
 
@@ -194,7 +247,7 @@ class AzRunner:
 
     def http_get(self, url: str, timeout: int = 20) -> Tuple[bool, Dict[str, Any], CommandRecord]:
         host = urlparse(url).hostname or ""
-        if not host.endswith(ALLOWED_HTTP_HOST_SUFFIXES):
+        if not _host_allowed(host):
             raise CommandNotAllowed(f"HTTP probe to {host} not allowed")
         start = time.time()
         status, body, err = None, "", ""
@@ -213,6 +266,88 @@ class AzRunner:
         if self.record_to is not None:
             self._recorded[f"HTTP GET {url}"] = {"exit_code": status, "stdout": result, "stderr": err}
         return status is not None and 200 <= status < 400, result, rec
+
+    def get_token(self, scope: str, timeout: int = 60) -> Tuple[bool, str, CommandRecord]:
+        """Sign-in token for the user's own identity. Kept in memory only: never logged, recorded or put in a report."""
+        if not _TOKEN_SCOPE.match(scope):
+            raise CommandNotAllowed(f"token scope not allowed: {scope}")
+        label = f"az account get-access-token --scope {scope} (token never recorded)"
+        if not self.available:
+            rec = CommandRecord(label, None, _now(), 0, "Azure CLI not found on PATH", source="skipped")
+            self._log(rec)
+            return False, "Azure CLI not found on PATH", rec
+        start = time.time()
+        try:
+            proc = subprocess.run(
+                [self.az, "account", "get-access-token", "--scope", scope, "--query", "accessToken", "-o", "tsv"]
+                + ["--only-show-errors"],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                encoding="utf-8",
+                errors="replace",
+                stdin=subprocess.DEVNULL,
+            )
+            code, token, err = proc.returncode, proc.stdout.strip(), proc.stderr.strip()
+        except subprocess.TimeoutExpired:
+            code, token, err = None, "", f"timed out after {timeout}s"
+        ok = code == 0 and token.count(".") == 2
+        rec = CommandRecord(label, code, _now(), int((time.time() - start) * 1000), _excerpt("", err), source="live")
+        self._log(rec)
+        return ok, (token if ok else redact_text(err)[:600] or "no token returned"), rec
+
+    def http_request(
+        self,
+        method: str,
+        url: str,
+        headers: Optional[Dict[str, str]] = None,
+        json_body: Optional[Dict[str, Any]] = None,
+        timeout: int = 90,
+    ) -> Tuple[bool, Dict[str, Any], CommandRecord]:
+        """Send one request to an allow-listed host. Credentials in ``headers`` are never recorded or returned."""
+        method = method.upper()
+        if method not in ("GET", "POST", "DELETE"):
+            raise CommandNotAllowed(f"HTTP {method} not allowed")
+        host = urlparse(url).hostname or ""
+        if not _host_allowed(host):
+            raise CommandNotAllowed(f"HTTP request to {host} not allowed")
+        bad = [
+            k for k, v in (headers or {}).items() if re.search(r"[\x00-\x1f\x7f\s]", str(v).replace("Bearer ", "", 1))
+        ]
+        if bad:  # never let http.client echo a credential back in an error message
+            raise CommandNotAllowed(f"header value for {bad[0]} contains whitespace or control characters")
+        start = time.time()
+        status, body, err = None, "", ""
+        data = json.dumps(json_body).encode("utf-8") if json_body is not None else None
+        req_headers = {"User-Agent": "accel-troubleshooter/0.1", "Content-Type": "application/json", **(headers or {})}
+        try:
+            req = urllib.request.Request(url, data=data, method=method, headers=req_headers)
+            # Redirects are never followed: they would forward the Authorization header to whatever host answers.
+            with _NO_REDIRECT_OPENER.open(req, timeout=timeout) as resp:  # nosec - host allowlisted
+                status, body = resp.status, resp.read(20000).decode("utf-8", "replace")
+        except urllib.error.HTTPError as e:
+            status, body = e.code, e.read(20000).decode("utf-8", "replace") if e.fp else ""
+        except (urllib.error.URLError, OSError) as e:
+            err = str(e)
+        except (ValueError, http.client.HTTPException) as e:
+            err = f"request could not be sent ({type(e).__name__})"  # never include e: it can echo header values
+        dur = int((time.time() - start) * 1000)
+        try:
+            parsed = redact_obj(json.loads(body)) if body.strip() else None
+        except ValueError:
+            parsed = None
+        result = {
+            "status": status,
+            "json": parsed,
+            "body_excerpt": redact_text(body[:600]),
+            "error": redact_text(err),
+            "latency_ms": dur,
+        }
+        rec = CommandRecord(
+            f"HTTP {method} {url} (credentials not recorded)", status, _now(), dur, _excerpt(body[:300], err), "live"
+        )
+        self._log(rec)
+        return status is not None and 200 <= status < 300, result, rec
 
     def save_recording(self) -> Optional[Path]:
         if self.record_to is None:
@@ -282,6 +417,37 @@ class ReplayRunner(AzRunner):
         self._log(rec)
         return status is not None and 200 <= status < 400, result, rec
 
+    def get_token(self, scope: str, timeout: int = 60) -> Tuple[bool, str, CommandRecord]:
+        if not _TOKEN_SCOPE.match(scope):
+            raise CommandNotAllowed(f"token scope not allowed: {scope}")
+        fx = self._lookup(f"TOKEN {scope}")
+        label = f"az account get-access-token --scope {scope} (token never recorded)"
+        if fx is None:
+            rec = CommandRecord(label, None, _now(), 0, "no fixture", source="replay-missing")
+            self._log(rec)
+            return False, "no fixture recorded for the token request", rec
+        ok = fx.get("exit_code", 0) == 0
+        rec = CommandRecord(label, fx.get("exit_code", 0), _now(), 0, "" if ok else fx.get("stderr", ""), "replay")
+        self._log(rec)
+        return ok, (fx.get("stdout") or "fake.token.value") if ok else fx.get("stderr", ""), rec
+
+    def http_request(self, method, url, headers=None, json_body=None, timeout=90):
+        method = method.upper()
+        if method not in ("GET", "POST", "DELETE"):
+            raise CommandNotAllowed(f"HTTP {method} not allowed")
+        key = f"HTTP {method} {url}"
+        fx = self._lookup(key)
+        label = f"{key} (credentials not recorded)"
+        if fx is None:
+            rec = CommandRecord(label, None, _now(), 0, "no fixture", source="replay-missing")
+            self._log(rec)
+            return False, {"status": None, "error": "no-fixture", "json": None}, rec
+        result = {"json": None, "body_excerpt": "", "error": "", "latency_ms": 0, **(fx.get("stdout") or {})}
+        status = result.get("status")
+        rec = CommandRecord(label, status, _now(), 0, json.dumps(result)[:300], source="replay")
+        self._log(rec)
+        return status is not None and 200 <= status < 300, result, rec
+
 
 class OfflineRunner(AzRunner):
     """No Azure access at all: every call is recorded as skipped."""
@@ -302,3 +468,11 @@ class OfflineRunner(AzRunner):
     def http_get(self, url, timeout=20):
         rec = CommandRecord(f"HTTP GET {url}", None, _now(), 0, "offline mode: not executed", source="skipped")
         return False, {"status": None, "error": "offline"}, rec
+
+    def get_token(self, scope, timeout=60):
+        rec = CommandRecord("token request", None, _now(), 0, "offline mode: not executed", source="skipped")
+        return False, "offline mode", rec
+
+    def http_request(self, method, url, headers=None, json_body=None, timeout=90):
+        rec = CommandRecord(f"HTTP {method} {url}", None, _now(), 0, "offline mode: not executed", source="skipped")
+        return False, {"status": None, "error": "offline", "json": None}, rec

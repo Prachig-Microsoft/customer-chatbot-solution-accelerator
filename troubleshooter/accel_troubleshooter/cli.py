@@ -50,6 +50,9 @@ def _overrides(args) -> Dict[str, Any]:
         o["subscription"] = args.subscription
     if getattr(args, "all_regions", False):
         o["all_regions"] = True
+    for attr, key in (("window", "window"), ("client_id", "client_id"), ("token_env", "token_env")):
+        if getattr(args, attr, None):
+            o[key] = getattr(args, attr)
     caps = {}
     for spec in getattr(args, "capacity", None) or []:
         k, _, v = spec.partition("=")
@@ -354,6 +357,30 @@ def cmd_health(args) -> int:
     return _finish(ts, diag)
 
 
+def cmd_chat_test(args) -> int:
+    """Health check plus ONE real signed-in chat message (asks first); the test session is deleted afterwards."""
+    ts = _ts(args)
+    if not args.yes:
+        if not sys.stdin.isatty() or args.no_prompt:
+            print("This sends one real chat message as you. Re-run with --yes to approve it.", file=sys.stderr)
+            return EXIT_ERROR
+        print(
+            "This sends ONE real chat message to your chat API using your own sign-in, uses a little model quota,\n"
+            "and deletes the test chat session afterwards. Nothing else is changed."
+        )
+        sys.stdout.write("Type 'yes' to continue: ")
+        sys.stdout.flush()
+        if sys.stdin.readline().strip().lower() not in ("yes", "y"):
+            print("Nothing was sent.")
+            return EXIT_FINDINGS
+    o = _overrides(args)
+    o["chat_test_approved"] = True
+    checks = [c for c, s in CHECKS.items() if not s.opt_in] + ["chat.e2e"]
+    diag = _diagnose(ts, args, "check my deployment health and chat", overrides=o, only_checks=checks)
+    _emit(args, diag.to_dict())
+    return _finish(ts, diag)
+
+
 def cmd_run(args) -> int:
     """Run a deployment/post-provision command, keep its output, and diagnose automatically when it fails."""
     cmd = list(args.cmd)
@@ -644,6 +671,61 @@ def cmd_watch(args) -> int:
     return EXIT_FINDINGS
 
 
+def cmd_draft_guide(args) -> int:
+    """Draft one new troubleshooting-guide row from a diagnosed incident (prints it; never edits the guide)."""
+    from .guide_draft import draft_entry, render_draft
+
+    text = _issue_text(args)
+    if not text:
+        print("Nothing to draft from. Pass the problem as text, --log FILE, --from-clipboard or '-'.", file=sys.stderr)
+        return EXIT_ERROR
+    ts = _ts(args)
+    diag = _diagnose(ts, args, text, full=getattr(args, "full", False))
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if diag.clarification:
+        print(diag.clarification)
+        return EXIT_CLARIFY
+    accel = diag.accelerator["id"]
+    profile = ts.profiles[accel]
+    guide_rel = (profile.get("docs", {}).get("troubleshooting") or [""])[0]
+    draft = draft_entry(diag, Path(diag.accelerator["repo_path"]) / guide_rel, args.note or "", args.force, profile)
+    print(json.dumps(draft, indent=2) if args.format == "json" else render_draft(draft, guide_rel, args.plain))
+    if args.out and draft.get("drafted"):
+        Path(args.out).write_text(render_draft(draft, guide_rel, True), encoding="utf-8")
+        print(f"\nDraft saved to {args.out}")
+    return EXIT_OK if draft.get("drafted") else EXIT_FINDINGS
+
+
+def cmd_drift(args) -> int:
+    """Where the docs and scripts disagree with the Bicep and parameter files (offline; nothing is changed)."""
+    from .drift import build_drift_report, render_drift_compact, render_drift_markdown
+
+    ts = _ts(args)
+    diag = ts.diagnose(
+        "documentation drift",
+        accelerator=args.accelerator,
+        only_checks=["repo.config_drift"],
+        env_file="none",
+        log=False,
+    )
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if diag.clarification:
+        print(diag.clarification)
+        return EXIT_CLARIFY
+    report = build_drift_report(diag.to_dict())
+    if args.format == "json":
+        text = json.dumps(report, indent=2)
+    elif args.format == "full":
+        text = render_drift_markdown(report)
+    else:
+        text = render_drift_compact(report, plain=args.plain)
+    print(text)
+    if args.out:
+        Path(args.out).write_text(render_drift_markdown(report), encoding="utf-8")
+        print(f"\nReport saved to {args.out}")
+    return EXIT_FINDINGS if report["findings"] else EXIT_OK
+
+
 def cmd_about(args) -> int:
     """What is this accelerator? Name, short description from its README, services, docs and repo."""
     from .about import build_about, render_about
@@ -740,6 +822,9 @@ def build_parser() -> argparse.ArgumentParser:
             sp.add_argument("--no-prompt", action="store_true", help="Never ask questions (for scripts/CI)")
             sp.add_argument("--region", help="AI services region (overrides azd env)")
             sp.add_argument("--subscription", help="Expected subscription id")
+            sp.add_argument(
+                "--window", help="How far back to read the apps' error logs, e.g. PT30M, PT6H, P1D (default PT1H)"
+            )
             g = sp.add_mutually_exclusive_group()
             g.add_argument("--offline", action="store_true", help="No Azure calls (docs + repo only)")
             g.add_argument("--replay", help="Serve az outputs from a fixture JSON file")
@@ -827,6 +912,28 @@ def build_parser() -> argparse.ArgumentParser:
 
     st = sub.add_parser("stats", help="Operational statistics from the run log")
     st.set_defaults(func=cmd_stats)
+
+    dg = sub.add_parser(
+        "draft-guide", help="Draft a new troubleshooting-guide row from a diagnosed incident (never edits the guide)"
+    )
+    common(dg, issue_positional=True)
+    dg.add_argument("--note", help="What fixed it, in your own words (added as 'Verified fix')")
+    dg.add_argument("--force", action="store_true", help="Draft even if the guide already documents the cause")
+    dg.add_argument("--full", action="store_true", help="Run every check regardless of classification")
+    dg.set_defaults(func=cmd_draft_guide)
+
+    dr = sub.add_parser("drift", help="Where docs and scripts disagree with the Bicep/parameter files (offline)")
+    common(dr, live=False)
+    dr.set_defaults(func=cmd_drift)
+
+    ct = sub.add_parser(
+        "chat-test", help="Health check plus one real signed-in chat message (asks first; deletes the test session)"
+    )
+    common(ct)
+    ct.add_argument("--yes", action="store_true", help="Approve sending the test message (no question asked)")
+    ct.add_argument("--client-id", help="Client id of the API's Entra app registration (default: azd env)")
+    ct.add_argument("--token-env", metavar="NAME", help="Read the bearer token from this environment variable")
+    ct.set_defaults(func=cmd_chat_test)
 
     wt = sub.add_parser("watch", help="Follow a deployment started in another terminal; diagnose at the first failure")
     common(wt)

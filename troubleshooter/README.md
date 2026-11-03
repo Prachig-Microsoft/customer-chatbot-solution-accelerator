@@ -33,6 +33,10 @@ Get-Content deploy.log | python -m accel_troubleshooter diagnose -      # stdin
 python -m accel_troubleshooter health                        # full read-only health check of the current azd env
 python -m accel_troubleshooter watch                         # follow `azd up` running in ANOTHER terminal; diagnoses at the first failure
 python -m accel_troubleshooter about                         # what is this accelerator (description from its README)
+python -m accel_troubleshooter chat-test                     # health + ONE real signed-in chat message (asks first, deletes the test session)
+python -m accel_troubleshooter drift                         # where docs/scripts disagree with the Bicep + parameter files (offline)
+python -m accel_troubleshooter draft-guide "<error>" --note "what fixed it"   # draft a new troubleshooting-guide row (prints only)
+python -m accel_troubleshooter health --window PT15M         # app error logs from the last 15 minutes only (default 1 hour)
 python -m accel_troubleshooter quota                         # quota table for every allowed AI region
 python -m accel_troubleshooter search "InsufficientQuota"    # cited doc retrieval
 python -m accel_troubleshooter eval                          # regression / evaluation suite (no Azure needed)
@@ -148,7 +152,13 @@ The az runner rejects any command not on the read-only allow-list and any argume
 name and value pattern. Any `{"name", "value"}` pair (App Service settings) has its value replaced at the runner layer,
 so reports, excerpts and recordings only show set/empty/placeholder state. Git diff evidence hides `.env` values and
 secret-named keys. Recorded fixtures are anonymized (subscription/tenant ids, UPNs, tenant names). The MCP server
-exposes one write tool, `apply_fix`, which refuses without explicit user approval (see Copilot / MCP).
+exposes two gated tools, `apply_fix` and `chat_test`, which refuse without explicit user approval (see Copilot / MCP).
+`az rest` is allowed for exactly two **GET** reads (the Application Insights component in ARM, and the Application
+Insights query API); `--body`, `--headers`, other hosts, other resource types and other methods are rejected. The chat
+test's HTTP calls never follow redirects (that would forward the token), only go to the host Azure reports for the API
+app (never a URL from a local file), refuse tokens containing whitespace, and keep the token out of every log, report
+and error message. The test session is deleted after the message, even after a timeout; a failed delete is reported
+with the session id so you can remove it by hand.
 
 **Policy exemption tag (`apply-exemption-tag`)** is applied in stages because Azure applies tags and network changes
 asynchronously: (1) tag the resource group and the Cosmos DB account, (2) poll `az tag list` until the tag is visible
@@ -187,10 +197,12 @@ infra/main.bicep:98 default").
 `.vscode/mcp.json` registers the stdio server `accelerator-troubleshooter`
 (`python troubleshooter/mcp_launcher.py`, with no `cwd` or `${workspaceFolder}` so it starts from any host; requires
 `pip install -r troubleshooter/requirements-mcp.txt`). Its tools are
-`identify_accelerator`, `about_accelerator`, `search_docs`, `health_check`, `diagnose`, `quota_check`, `preflight` and
-`list_checks` (all read-only) plus **`apply_fix`**, the one gated write tool: it refuses unless the user approved that
-exact change and only runs allow-listed actions. Every tool runs the same CLI in a fresh process, so **chat and terminal
-always give the same findings**. In VS Code, pick the **accelerator-troubleshooter** custom agent in Copilot Chat and
+`identify_accelerator`, `about_accelerator`, `search_docs`, `health_check`, `diagnose`, `quota_check`, `preflight`,
+`doc_drift`, `draft_guide_entry` and `list_checks` (all read-only; `draft_guide_entry` only prints a draft) plus two
+gated tools that act for the user and refuse unless the user approved that exact action: **`apply_fix`** (one
+allow-listed fix) and **`chat_test`** (one real chat message, see "Real chat test"). Every tool runs the same CLI in a
+fresh process, so **chat and terminal always give the same findings**. In VS Code, pick the **accelerator-troubleshooter**
+custom agent in Copilot Chat and
 say hi, or type `/` and use one of the four ready-made questions (skills in `.github/skills/`; type the command, then
 your text):
 
@@ -272,6 +284,51 @@ Manual alternative: copy the `troubleshooter/` folder and the files above by han
 `preflight` prints **NOT CHECKED** (exit code 3), never GO, when no live quota check could run (offline, not logged
 in, or the repo could not be found).
 
+## Four more capabilities
+
+### App error logs (Application Insights), part of every health check
+`appinsights.errors` reads what the apps themselves logged in the last hour (`--window PT15M`, `PT6H`, `P1D` to change
+it): exceptions, error-level logs, the accelerator's own `Error_*` events (for example `Error_Config_Missing`,
+`Error_Agent_Rate_Limit`) and HTTP 5xx requests. Errors are grouped (ids and numbers normalised), counted, given a
+latest-seen time and classified: `cosmos-firewall`, `model-not-found`, `throttled`, `rbac-denied`, `auth-token`,
+`config-missing`, `timeout-network`, `other`. A category already explained by another finding (for example the Cosmos
+firewall error when public access is disabled by policy) is added to that finding as evidence instead of being
+reported twice; an unexplained one becomes its own finding with the closest guide rows as keyword matches. It uses two
+read-only `az rest` GET calls (component → AppId, then the query API with a table name only), needs Reader on the
+Application Insights resource, and says so plainly when monitoring is off or unreadable. Errors older than a fix stay
+in the window, so the report shows when each was last seen.
+
+### Real chat test (`chat-test`, chat tool `chat_test`)
+Health probes only prove the apps answer "alive" (the chat API's `/health` never calls Cosmos). `chat-test` runs the
+full health check plus **one real message** through the path a user takes: sign-in token, `POST /api/chat/message`,
+Cosmos DB, Foundry agents, model. It is **opt-in and approval-gated** (terminal: asks you to type `yes`, or `--yes`;
+chat: the agent asks yes/no, then calls `chat_test` with `user_approved=true`) because it writes one chat session and
+uses a little model quota; the test session is deleted afterwards. The token comes from your own `az login`
+(`az account get-access-token --scope api://<client-id>/user_impersonation`, client id from
+`AZURE_ENV_ENTRA_CLIENT_ID` or `--client-id`) or from an environment variable (`--token-env NAME`). It is held in memory
+only and never logged, recorded or put in a report. If Azure CLI is not allowed to request tokens for the API, the
+result says how to fix it (add Azure CLI as a pre-authorised client of the app registration, or use `--token-env`).
+Failures are classified (401 sign-in, 503 missing configuration, 429 throttling, Cosmos firewall, role denied, model
+deployment missing, timeout) and back up the matching finding. Other accelerators need a `chat_test` block in their
+profile (see `profiles/customer-chatbot.json`).
+
+### Documentation drift (`drift`, chat tool `doc_drift`)
+Offline and read-only. Compares the docs and scripts with `infra/main.bicep` and `infra/main.parameters.json`:
+documented default values vs the template default (resolved the way azd does), documented allowed values and minimums,
+variables documented but never read or read but never documented, regions and models in the quota docs and scripts
+that the template does not use, broken relative links (GitHub root-relative links resolve from the repo root) and
+scripts a doc tells you to run that do not exist. Every finding names the file and line and how to fix it;
+`drift --format full --out drift.md` writes a PR-ready checklist. Doc findings are low severity: they never become a
+"cause" in a health check.
+
+### Draft a guide entry (`draft-guide`, chat tool `draft_guide_entry`)
+Turns a diagnosed incident into one row in the guide's own table format
+(`| **Error** | Description | <ul><li>steps</li></ul> |`), generalised (resource names, ids, emails, addresses and
+secrets replaced by placeholders), with how to confirm it (the read-only commands the checks ran), the cause, the fix
+steps, your `--note` ("verified fix") and references. It says which section the row belongs to and after which line
+to insert it, and refuses with a pointer when the guide already documents the error code (`--force` overrides). It
+**only prints**; nothing is written to the guide unless you ask the chat agent to insert it.
+
 ## Test it end to end (five scenarios taken from the troubleshooting guide)
 
 Each scenario can be reproduced safely and each is documented in `documents/TroubleShootingSteps.md`. Run them from
@@ -297,6 +354,41 @@ the guide's own row and shows its steps, and when the guide has no entry it says
    the first failed operation, even while ARM still reports the deployment as running.
 4. Terminal B: the post-provision scripts from the deployment guide (build images, data and agents).
 5. Terminal A: `python -m accel_troubleshooter health`; chat works the same way (`/preflight`, `/health-check`).
+
+## Demo playbook (about 25 minutes; parts 1 and 2 need no deployment)
+
+**Part 1 - no Azure resources needed (5 min).** Terminal in `troubleshooter/`:
+1. `python -m accel_troubleshooter about` (or chat: "hi", then `/about-accelerator`): what the accelerator is, from its README.
+2. `python -m accel_troubleshooter preflight`: GO / NO-GO, recommended region, live quota, the `SecurityControl` tag reminder.
+3. `python -m accel_troubleshooter drift`: real doc-vs-template mismatches with file and line;
+   `drift --format full --out drift.md` for a PR-ready checklist.
+
+**Part 2 - the troubleshooting guide's errors, pasted (5 min).** For each, run
+`python -m accel_troubleshooter diagnose "<paste>"` (or paste it after `/why-is-this-failing` in chat):
+1. `ResourceGroupNotFound: Resource group 'rg-old' could not be found.` (guide row, suggests a new azd env)
+2. `InsufficientQuota: This operation require 50 new capacity in quota Tokens Per Minute ... available capacity 20`
+3. `DeploymentModelNotSupported ... Version:2099-01-01` (model/region check, lists the versions that exist)
+4. `The provided value 'westus' for the template parameter 'azureAiServiceLocation' is not valid` (Bicep `@allowed`, file:line)
+5. `SpecialFeatureOrQuotaIdRequired: ... model 'Name:o3'` (guide row, access-request form)
+6. An error the guide does not have (for example `ZxQuuxWidgetError`): the agent says the guide has no entry and links
+   external searches; then `draft-guide "<same text>" --note "what fixed it"` shows the row it would add.
+
+**Part 3 - fresh deployment, two terminals (15 min).**
+
+| Step | Terminal A (agent) | Terminal B (deployment) |
+|---|---|---|
+| 1 | `preflight` (or `/preflight`): GO + region | |
+| 2 | | `azd env new demo1`, `azd env set AZURE_ENV_AI_SERVICE_LOCATION <region from preflight>`, `azd up` |
+| 3 | `watch`: one line per change, a full diagnosis at the first failed operation | (azd runs) |
+| 4 | | post-provision: build images, then data and agents (Deployment Guide 5.3) |
+| 5 | `health` (or `/health-check`): apps, RBAC, quota, **app error logs**, network | |
+| 6 | If a Cosmos/policy problem shows: answer **yes** to the tag fix, watch tag → wait → enable → re-check | |
+| 7 | `chat-test` (or "prove chat works" in chat): ONE real message; says where it breaks if it does | |
+| 8 | Break something on purpose: `az webapp stop -g <rg> -n <api-app>`, then `health`; **yes** to start it; `health` again | |
+| 9 | `draft-guide "chat did not work after the policy tag" --note "tagged the RG and enabled Cosmos"` | |
+
+Cleanup: `azd down --purge --force`. Everything the agent runs is read-only except the three things you approve with
+**yes**: a fix, the chat test, and (in chat only) inserting a drafted guide row.
 
 ## Demo scenarios (all reversible, all verified live on a real deployment)
 

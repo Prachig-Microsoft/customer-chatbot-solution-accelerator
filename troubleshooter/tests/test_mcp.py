@@ -99,8 +99,38 @@ def test_mcp_server_lists_read_only_tools():
         "quota_check",
         "preflight",
     } <= tools
+    assert {"chat_test", "doc_drift", "draft_guide_entry"} <= tools
     assert {t for t in tools if "fix" in t or "execute" in t} == {"apply_fix"}  # the single, gated write tool
     assert "chat-with-your-data" in text
+
+
+def test_chat_test_sends_nothing_without_the_users_approval(monkeypatch):
+    from accel_troubleshooter import mcp_server
+
+    ran = []
+    monkeypatch.setattr(mcp_server, "_cli", lambda *a, **k: ran.append(a) or "ran")
+    assert "has not approved" in mcp_server.chat_test(user_approved=False, resource_group="rg-x")
+    assert ran == []  # not even the health check runs behind the user's back
+    assert mcp_server.chat_test(user_approved=True, resource_group="rg-x", client_id="cid") == "ran"
+    argv = ran[0][0]
+    assert argv[:2] == ["chat-test", "--yes"] and argv[argv.index("--client-id") + 1] == "cid"
+    assert argv[argv.index("--resource-group") + 1] == "rg-x" and "--no-prompt" in argv
+
+
+def test_read_only_tools_pass_their_arguments_through(monkeypatch):
+    from accel_troubleshooter import mcp_server
+
+    ran = []
+    monkeypatch.setattr(mcp_server, "_cli", lambda *a, **k: ran.append(a[0]) or "ok")
+    mcp_server.doc_drift("customer-chatbot")
+    mcp_server.draft_guide_entry("boom", resource_group="rg-x", note="fixed it", force=True)
+    mcp_server.health_check(resource_group="rg-x", window="PT15M")
+    drift, draft, health = ran
+    assert drift[:2] == ["drift", "--no-color"] and "customer-chatbot" in drift
+    assert (
+        draft[:2] == ["draft-guide", "boom"] and "--force" in draft and draft[draft.index("--note") + 1] == "fixed it"
+    )
+    assert health[0] == "health" and health[health.index("--window") + 1] == "PT15M"
 
 
 def test_apply_fix_refuses_without_user_approval_and_for_non_allowlisted_actions(monkeypatch):

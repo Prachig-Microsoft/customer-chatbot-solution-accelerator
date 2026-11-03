@@ -16,6 +16,7 @@ import re
 from typing import Any, Callable, Dict, List, Tuple
 
 from .actions import build_action
+from .diagnostics.app_checks import _app_name
 from .diagnostics.base import DiagContext
 from .models import CONFIRMED, FAIL, LIKELY, POSSIBLE, Action, Hypothesis
 from .repo import parse_bicep_params, parse_parameters_env_map, template_sets_tag
@@ -1132,6 +1133,144 @@ def unhealthy_without_cause(ctx):
     ]
 
 
+# --------------------------------------------------------------------------- what the apps logged / a real chat test
+
+# A logged or observed error category already explained by one of these findings is added to it as evidence
+# instead of being reported a second time.
+_COVERED_BY = {
+    "cosmos-firewall": {"public-access-disabled"},
+    "rbac-denied": {"rbac-missing", "deployer-cosmos-role-missing"},
+    "throttled": {"model-throttling", "quota-insufficient"},
+    "config-missing": {"app-settings-missing", "agents-not-created"},
+    "model-not-found": {"model-region-unsupported"},
+}
+_CERTAIN_FROM_STATUS = {"cosmos-firewall", "auth-token", "config-missing"}  # the text or HTTP status names the cause
+
+
+def _category_hypothesis(ctx, cat: str, lines: List[str], source_check: str, from_chat: bool, extra_missing=None):
+    hyp_ids = ctx.facts.get("hyp_ids", set())
+    covered = (_COVERED_BY.get(cat, set()) | {f"observed-{cat}"}) & hyp_ids
+    if covered:
+        for hid in sorted(covered):
+            ctx.facts.setdefault("hyp_notes", {}).setdefault(hid, []).extend(lines)
+            ctx.facts.setdefault("hyp_support", {}).setdefault(hid, set()).add(source_check)
+        return []
+    info = {
+        "cosmos-firewall": (
+            "Cosmos DB is refusing the app: its firewall blocks the request",
+            ctx.ref("deployment", "blocking public network access"),
+            "Networking / Cosmos DB",
+        ),
+        "model-not-found": (
+            "The app asks for a model deployment that does not exist in the AI account",
+            ctx.ts_ref("DeploymentNotFound"),
+            "AI model deployments",
+        ),
+        "throttled": ("Model requests are being throttled (HTTP 429)", ctx.ref("quota", "Quota"), "Model capacity"),
+        "rbac-denied": (
+            "An identity is being denied access (403 / AuthorizationFailed)",
+            ctx.ref("deployment", "role"),
+            "RBAC",
+        ),
+        "auth-token": (
+            "Sign-in tokens are being rejected (HTTP 401)",
+            ctx.ref("auth", "user_impersonation"),
+            "Authentication",
+        ),
+        "config-missing": (
+            "The app reports missing configuration",
+            ctx.ref("deployment", "Build Container Images"),
+            "App configuration",
+        ),
+        "timeout-network": (
+            "Calls from the app time out or cannot connect",
+            ctx.ref("deployment", "network"),
+            "Networking",
+        ),
+        "other": ("The apps are logging errors that match no documented cause", "", "Application runtime"),
+    }[cat]
+    certain = cat in _CERTAIN_FROM_STATUS or (cat == "cosmos-firewall")
+    if cat == "other" or cat == "timeout-network":
+        status, conf = POSSIBLE, "low"
+    elif certain:
+        status, conf = CONFIRMED, "high"
+    else:
+        status, conf = LIKELY, "medium"
+    rg = ctx.resource_group
+    api = next((_app_name(ctx, a) for a in ctx.profile.get("apps", []) if a.get("role") == "backend"), "")
+    acts = [build_action("collect-app-logs", ctx.profile, resource_group=rg, app=api)] if api and rg else []
+    docs = [d for d in [info[1]] if d]
+    if cat == "other":
+        res = ctx.results.get("appinsights.errors")
+        docs += [d["ref"] for d in (res.evidence.get("closest_docs", []) if res else [])]
+    missing = list(extra_missing or [])
+    if cat == "other":
+        missing.append(
+            "the stack trace of the top error (az webapp log tail, or the operation id in Application Insights)"
+        )
+    return [
+        (
+            Hypothesis(
+                f"observed-{cat}",
+                info[0],
+                status,
+                conf,
+                lines,
+                supporting_checks=[source_check],
+                missing_evidence=missing,
+                doc_refs=docs,
+                remediation_ids=[a.id for a in acts],
+                component=info[2],
+            ),
+            acts,
+        )
+    ]
+
+
+@rule(37)
+def app_logged_errors(ctx):
+    data = ctx.facts.get("appinsights_errors")
+    if not data or not data.get("groups"):
+        return []
+    from .diagnostics.insights_checks import _minutes_ago
+
+    out = []
+    window = data["window"]
+    known = [c for c in data["by_category"] if c != "other"]
+    for cat, count in sorted(data["by_category"].items(), key=lambda kv: -kv[1]):
+        groups = [g for g in data["groups"] if g["category"] == cat and g["source"] != "request"]
+        if not groups or (cat == "other" and known):
+            continue
+        ago = _minutes_ago(max(g["last"] for g in groups))
+        lines = [
+            f"Application Insights (last {window}): {count} logged error(s) of this kind"
+            + (f", latest {ago} min ago" if ago is not None else "")
+        ] + [f"{g['role'] or 'app'}: {g['what']} (x{g['count']})" for g in groups[:2]]
+        if cat == "other" and data.get("requests_failed"):
+            lines.append(f"{data['requests_failed']} request(s) returned HTTP 5xx in the same window")
+        out += _category_hypothesis(
+            ctx,
+            cat,
+            lines,
+            "appinsights.errors",
+            False,
+            ["errors older than the fix stay in the window: use --window PT15M to look only at the last 15 minutes"],
+        )
+    return out
+
+
+@rule(38)
+def chat_e2e_failed(ctx):
+    res = ctx.facts.get("chat_e2e")
+    if not res or res.get("ok"):
+        return []
+    lines = [
+        f"a real signed-in chat message failed (HTTP {res.get('status') or 'no response'}): "
+        f"{str(res.get('detail') or '')[:160]}".rstrip(": ")
+    ]
+    return _category_hypothesis(ctx, res.get("category", "other"), lines, "chat.e2e", True)
+
+
 # --------------------------------------------------------------------------- driver
 
 _STATUS_RANK = {CONFIRMED: 0, LIKELY: 1, POSSIBLE: 2}
@@ -1157,6 +1296,11 @@ def analyse(ctx: DiagContext) -> Tuple[List[Hypothesis], Dict[str, Action]]:
                 keys.append(a.id)
             h.remediation_ids = keys
             hyps.append((priority, h))
+        ctx.facts["hyp_ids"] = {h.id for _, h in hyps}
+    notes, support = ctx.facts.get("hyp_notes", {}), ctx.facts.get("hyp_support", {})
+    for _, h in hyps:  # evidence from app logs / the chat test that backs an existing finding
+        h.rationale.extend(n for n in notes.get(h.id, []) if n not in h.rationale)
+        h.supporting_checks.extend(c for c in sorted(support.get(h.id, ())) if c not in h.supporting_checks)
     hyps.sort(key=lambda ph: (_STATUS_RANK.get(ph[1].status, 3), _CONF_RANK.get(ph[1].confidence, 3), ph[0]))
     return [h for _, h in hyps], actions
 
@@ -1173,7 +1317,9 @@ def missing_evidence(ctx: DiagContext, hyps: List[Hypothesis]) -> List[str]:
     when = [e.get("timestamp") for e in ctx.facts.get("deployment_errors", []) if e.get("timestamp")]
     if not ctx.issue.timestamps and not when and {"runtime", "deployment"} & set(ctx.issue.stages):
         out.append("Approximate time of failure (to correlate with deployment/activity logs)")
-    if {"runtime", "startup"} & set(ctx.issue.stages) and not any(h.id == "app-unhealthy" for h in hyps):
+    if {"runtime", "startup"} & set(ctx.issue.stages) and not (
+        any(h.id == "app-unhealthy" for h in hyps) or ctx.facts.get("appinsights_errors")
+    ):
         out.append("Application logs (az webapp log tail / Application Insights) for the failing request")
     for h in hyps:
         for m in h.missing_evidence:

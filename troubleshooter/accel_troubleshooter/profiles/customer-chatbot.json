@@ -35,9 +35,19 @@
       {"role": "realtime", "name_param": "gptRealtimeModelName", "version_param": "gptRealtimeModelVersion", "capacity_param": "gptRealtimeDeploymentCapacity", "sku_fixed": "GlobalStandard"}
     ],
     "quota_scripts": ["infra/scripts/pre-provision/checkquota.sh", "infra/scripts/pre-provision/quota_check_params.sh"],
-    "quota_doc": "documents/QuotaCheck.md"
+    "quota_doc": "documents/QuotaCheck.md",
+    "param_doc": "documents/CustomizingAzdParameters.md"
   },
   "policy_exemption_tag": {"name": "SecurityControl", "value": "Ignore"},
+  "chat_test": {
+    "app": "chat-api",
+    "path": "/api/chat/message",
+    "delete_path": "/api/chat/sessions/{session_id}",
+    "client_id_env": "AZURE_ENV_ENTRA_CLIENT_ID",
+    "scope": "user_impersonation",
+    "message": "Hello! Please reply with one short sentence so I know you are working.",
+    "source": "chat-app/backend/app/routers/chat.py:322 (POST /api/chat/message), auth: chat-app/backend/app/utils/auth_utils.py:19"
+  },
   "azd_env_keys": {
     "subscription": "AZURE_SUBSCRIPTION_ID",
     "resource_group": "AZURE_RESOURCE_GROUP",

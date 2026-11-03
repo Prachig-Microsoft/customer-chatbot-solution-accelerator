@@ -47,6 +47,8 @@ SHORT = {
     "rbac.app_identity": "app identity roles",
     "rbac.deployer_data": "your Cosmos DB role",
     "config.compare": "local vs Azure settings",
+    "appinsights.errors": "app error logs (1h)",
+    "chat.e2e": "real chat message",
 }
 
 
@@ -145,6 +147,21 @@ def _t(text: Any, n: int) -> str:
 
 def _check(d: Dict[str, Any], cid: str) -> Optional[Dict[str, Any]]:
     return next((c for c in d["checks"] if c["check_id"] == cid), None)
+
+
+_NOT_GUIDE_WORTHY = {"deployment-in-progress", "resource-group-empty", "az-cli-unavailable", "subscription-mismatch"}
+
+
+def _guide_gap(d: Dict[str, Any], top: Dict[str, Any]) -> bool:
+    """True when a real cause was found but the guide has no row for the error code the user reported."""
+    if top["id"].startswith("documented-") or top["id"] in _NOT_GUIDE_WORTHY:
+        return False
+    codes = {c.lower() for c in (d.get("issue") or {}).get("error_codes", [])}
+    for doc in d.get("docs", []):
+        if doc.get("doc_type") == "troubleshooting-row" and doc.get("category") != "summary":
+            if any(c in x.lower() for x in doc.get("error_codes", []) for c in codes):
+                return False
+    return True
 
 
 def _quota_lines(qc: Dict[str, Any], plain: bool) -> List[str]:
@@ -376,6 +393,25 @@ def render_compact(d: Dict[str, Any], kind: str = "diagnose", plain: bool = Fals
             out.append("  ▸ To apply a 🟡 action: fix <action-id> --approve   (you confirm; then it re-checks)")
 
     missing = d.get("missing_evidence", [])
+    if kind == "diagnose" and top and top["status"] in ("confirmed", "likely") and _guide_gap(d, top):
+        out += [
+            "",
+            "  ▸ The troubleshooting guide has no entry for this cause. To draft one (nothing is written):",
+            '    python -m accel_troubleshooter draft-guide "<same text>" --note "what fixed it"',
+        ]
+    health = _check(d, "webapp.health")
+    if (
+        a.get("chat_test")
+        and health
+        and health["status"] == "pass"
+        and not _check(d, "chat.e2e")
+        and kind == "diagnose"
+    ):
+        out += [
+            "",
+            "  ▸ Not proven yet: a real chat reply (health probes only say the apps are alive).",
+            "    Run: python -m accel_troubleshooter chat-test   (one message, asks first, cleans up)",
+        ]
     if kind == "diagnose" and not (top and top["status"] in ("confirmed", "likely")):
         close = [
             x

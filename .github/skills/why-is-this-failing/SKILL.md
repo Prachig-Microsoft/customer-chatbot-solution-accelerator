@@ -19,7 +19,9 @@ they typed after the command, or ask them to paste it) as `issue` exactly as wri
 - 🔬 live check: check id (for example `network.public_access`)
 - 🌐 external: the URL, marked "not from the accelerator docs, please verify"
 
-Then answer with: the **most likely cause** and its status/confidence exactly as the tool labelled them, the evidence,
-what is still missing, and the smallest safe fix with its category (🟢 / 🟡 / 📘 / 🔴). Never claim anything was fixed
-or run unless the tool output shows it. For a 🟡 fix, ask yes/no and call `apply_fix` only after the user says yes. If
-you have no web access, say so instead of guessing.
+Then answer with: the **most likely cause** and its status/confidence exactly as the tool labelled them, the evidence
+(including what the apps themselves logged, `appinsights.errors`, when the report has it), what is still missing, and
+the smallest safe fix with its category (🟢 / 🟡 / 📘 / 🔴). Never claim anything was fixed or run unless the tool
+output shows it. For a 🟡 fix, ask yes/no and call `apply_fix` only after the user says yes. If you have no web access,
+say so instead of guessing. When the report says the troubleshooting guide has no entry for the confirmed cause, end
+with: "The guide has no entry for this. Want me to draft one?" and use `draft_guide_entry` only if they say yes.
