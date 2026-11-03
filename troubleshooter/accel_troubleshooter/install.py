@@ -17,7 +17,15 @@ from .repo import TOOL_ROOT
 SERVER_NAME = "accelerator-troubleshooter"
 SERVER_ENTRY = {"type": "stdio", "command": "python", "args": ["troubleshooter/mcp_launcher.py"]}
 AGENT_REL = Path(".github") / "agents" / "accelerator-troubleshooter.agent.md"
-SKILL_NAMES = ["about-accelerator", "preflight", "health-check", "why-is-this-failing"]
+SKILL_NAMES = [
+    "about-accelerator",
+    "preflight",
+    "health-check",
+    "prove-chat-works",
+    "why-is-this-failing",
+    "draft-guide-entry",
+    "doc-drift",
+]
 RUNTIME = ["accel_troubleshooter", "mcp_launcher.py", "requirements-mcp.txt", "README.md", ".gitignore"]
 GENERATED = {".venv", ".cache", ".runs", "__pycache__", ".pytest_cache", ".mypy_cache", "demo-output"}
 

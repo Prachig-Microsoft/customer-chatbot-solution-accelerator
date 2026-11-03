@@ -580,8 +580,27 @@ def test_skills_are_valid_slash_commands():
     import re as _re
 
     skills = {p.parent.name: p for p in (REPO_ROOT / ".github" / "skills").glob("*/SKILL.md")}
-    # exactly the four questions users ask: what is this, before deploying, after deploying, an error
-    assert set(skills) == {"about-accelerator", "preflight", "health-check", "why-is-this-failing"}
+    # the seven things users ask, in the order of the greeting
+    assert set(skills) == {
+        "about-accelerator",
+        "preflight",
+        "health-check",
+        "prove-chat-works",
+        "why-is-this-failing",
+        "draft-guide-entry",
+        "doc-drift",
+    }
+    greeting = (REPO_ROOT / ".github" / "agents" / "accelerator-troubleshooter.agent.md").read_text(encoding="utf-8")
+    shown = _re.findall(r"^> \d\. .*?`/([a-z-]+)", greeting, _re.M)
+    assert shown == [
+        "about-accelerator",
+        "preflight",
+        "health-check",
+        "prove-chat-works",
+        "why-is-this-failing",
+        "draft-guide-entry",
+        "doc-drift",
+    ]  # every skill is in the greeting, in order
     tools = {
         "about_accelerator",
         "health_check",

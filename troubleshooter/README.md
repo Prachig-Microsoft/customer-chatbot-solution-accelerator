@@ -203,17 +203,21 @@ gated tools that act for the user and refuse unless the user approved that exact
 allow-listed fix) and **`chat_test`** (one real chat message, see "Real chat test"). Every tool runs the same CLI in a
 fresh process, so **chat and terminal always give the same findings**. In VS Code, pick the **accelerator-troubleshooter**
 custom agent in Copilot Chat and
-say hi, or type `/` and use one of the four ready-made questions (skills in `.github/skills/`; type the command, then
-your text):
+say hi (the agent replies with a grouped menu of the seven questions below), or type `/` and use one of them (skills in
+`.github/skills/`; type the command, then your text):
 
 | Slash command | When | What you get |
 |---|---|---|
 | `/about-accelerator` | first | accelerator name, 2-3 lines from its README (with file:line), Azure services, docs searched first |
 | `/preflight` | before `azd up` | GO / NO-GO, recommended region, quota needed vs free (live from your subscription), blockers |
-| `/health-check [rg-name]` | after `azd up` | health of the current azd env, or of any resource group you name |
+| `/health-check [rg-name]` | after `azd up` | health of the current azd env, or of any resource group you name, including what the apps logged |
+| `/prove-chat-works` | after a healthy check | asks first, then sends ONE real chat message with your sign-in and deletes the test session |
 | `/why-is-this-failing <error>` | on an error | the accelerator's docs first, then live checks, then (only if no solution) wider sources; every statement names its source (📘 docs path:line, 🔬 live check id, 🌐 external URL) |
+| `/draft-guide-entry <error>` | after fixing something new | a ready-to-paste, generalised troubleshooting-guide row with its section and line (prints only) |
+| `/doc-drift` | maintainers | where the docs and scripts disagree with the Bicep and parameter files, with file, line and fix |
 
-The terminal equivalents are `about`, `preflight`, `health` and `diagnose`. When `diagnose` finds no documented cause it
+The terminal equivalents are `about`, `preflight`, `health`, `chat-test`, `diagnose`, `draft-guide` and `drift`. When
+`diagnose` finds no documented cause it
 ends with "NOT IN THE ACCELERATOR DOCS?" and links to a GitHub-issues search and Microsoft Learn, labelled as external.
 
 After you update the troubleshooter code, restart the MCP server once so chat does not keep running an older copy
@@ -252,7 +256,7 @@ hypothesis, cited docs). `python -m accel_troubleshooter stats` aggregates it.
 ## Using it in another accelerator
 
 The tool needs only Python 3.10+ and the Azure CLI. One command copies everything (the tool, the Copilot agent, the
-four starter-question skills and the MCP entry) and tells you whether the target repo is recognised:
+seven starter-question skills and the MCP entry) and tells you whether the target repo is recognised:
 
 ```powershell
 # from this repo's troubleshooter folder; add --dry-run first to preview, --force to update an existing install
@@ -269,7 +273,7 @@ Then, in the other repository:
    keeps `.runs/` and `.cache/` out).
 
 What it copies: `troubleshooter/` (runtime only; add `--full` for tests, evals and the demo script),
-`.github/agents/accelerator-troubleshooter.agent.md`, `.github/skills/<4 skills>/SKILL.md`, and the
+`.github/agents/accelerator-troubleshooter.agent.md`, `.github/skills/<7 skills>/SKILL.md`, and the
 `accelerator-troubleshooter` server merged into `.vscode/mcp.json` (other servers are kept; a file with comments is left
 alone and the snippet is printed). Existing files are never overwritten without `--force`.
 
