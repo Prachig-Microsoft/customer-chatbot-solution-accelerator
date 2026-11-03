@@ -434,8 +434,14 @@ def _policy_fixture(synthetic_fixture, rg_tags=None, resource_tags=None):
     return fx
 
 
-def test_missing_exemption_tag_is_named_from_the_policys_own_rule(synthetic_fixture, synthetic_env_file):
-    ts = Troubleshooter(REPO_ROOT, ReplayRunner(_policy_fixture(synthetic_fixture)))
+def test_missing_exemption_tag_is_named_from_the_policys_own_rule(synthetic_fixture, synthetic_env_file, chatbot_copy):
+    # Use a copy whose template has no default tags, so the result never depends on the working tree's own edits.
+    bicep = chatbot_copy / "infra" / "main.bicep"
+    text = bicep.read_text(encoding="utf-8")
+    bicep.write_text(
+        __import__("re").sub(r"(?m)^param tags object = \{[^}]*\}", "param tags object = {}", text), encoding="utf-8"
+    )
+    ts = Troubleshooter(chatbot_copy, ReplayRunner(_policy_fixture(synthetic_fixture)))
     d = ts.diagnose("chat does not work", env_file=synthetic_env_file, full=True, log=False)
     h = next(x for x in d.hypotheses if x.id == "public-access-disabled")
     assert h.status == "confirmed" and "'SecurityControl' exemption tag is missing" in h.title

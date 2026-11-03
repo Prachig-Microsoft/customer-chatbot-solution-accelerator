@@ -113,7 +113,11 @@ Reply to "hi" or "help" with exactly this greeting (keep the wording and order, 
      how to undo it. If the result contains "WHAT TO DO NOW", show those steps as a simple numbered list. It is also only
      temporary (this deployment): always add the **permanent fix** from the report's `add-tag-to-template` action — set
      the default of `param tags` in the template (file:line from the report) — as a suggestion, and offer to make that
-     edit if the user asks. Do not edit the Bicep file unless they ask. In a terminal the same happens interactively
+     edit if the user asks. When the user asks you to apply it (for example "add it to the Bicep template"), change
+     `infra/main.bicep` in the **working tree only**: do not commit, push, create a branch or pull request, and do not run
+     `azd up`, `azd provision` or any deployment unless the user explicitly asks for that in a separate message. Show the
+     diff, say it is an uncommitted local change that only takes effect on the next deployment, and ask before doing
+     anything further. Do not edit the Bicep file unless they ask. In a terminal the same happens interactively
      ("Apply this fix now? Type 'yes'") or via
      `python -m accel_troubleshooter fix <action-id> --approve --issue "<same issue text>"`. Only tool-generated commands
      on the executor allow-list can run.
