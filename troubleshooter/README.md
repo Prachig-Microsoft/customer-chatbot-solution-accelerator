@@ -290,6 +290,14 @@ in, or the repo could not be found).
 
 ## Four more capabilities
 
+### Optional sign-in step (Microsoft Entra), part of every health check
+`auth.setup` reads only the *names* of the app settings `ENTRA_AUTH_CLIENT_ID` / `ENTRA_AUTH_TENANT_ID` on both backends
+(never values). Set on all: pass. Missing on all: info, because the guide marks it optional (DeploymentGuide 5.4), and the
+report adds an **OPTIONAL NEXT STEP** that names `infra/scripts/post-provision/configure_auth.ps1` / `.sh` and
+`documents/AppAuthentication.md`, saying to run it after the post-provision steps (images, data, agents) and to re-run
+the health check. Set on only some: warning ("re-run the script"). It is a manual step: the agent never runs it, because
+it creates or updates an app registration. The profile key is `auth_setup`; other accelerators add their own.
+
 ### App error logs (Application Insights), part of every health check
 `appinsights.errors` reads what the apps themselves logged in the last hour (`--window PT15M`, `PT6H`, `P1D` to change
 it): exceptions, error-level logs, the accelerator's own `Error_*` events (for example `Error_Config_Missing`,

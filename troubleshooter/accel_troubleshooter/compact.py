@@ -44,6 +44,7 @@ SHORT = {
     "network.public_access": "network access",
     "webapp.state": "app services",
     "webapp.health": "health endpoints",
+    "auth.setup": "sign-in (Entra, optional)",
     "rbac.app_identity": "app identity roles",
     "rbac.deployer_data": "your Cosmos DB role",
     "config.compare": "local vs Azure settings",
@@ -400,6 +401,26 @@ def render_compact(d: Dict[str, Any], kind: str = "diagnose", plain: bool = Fals
             '    python -m accel_troubleshooter draft-guide "<same text>" --note "what fixed it"',
         ]
     health = _check(d, "webapp.health")
+    auth = _check(d, "auth.setup")
+    if auth and auth["status"] in ("info", "warn") and kind == "diagnose":
+        ev = auth.get("evidence") or {}
+        scripts = " or ".join(x for x in (ev.get("script_ps1"), ev.get("script_sh")) if x)
+        out += [
+            "",
+            "OPTIONAL NEXT STEP  sign-in with Microsoft Entra (" + (ev.get("guide_step") or "see the guide") + ")",
+        ]
+        if ev.get("post_provision_pending"):
+            out.append("  ▸ First finish the post-provision steps above (images, data, agents); then:")
+        else:
+            out.append("  ▸ Post-provision is done, so this is the step left in the guide:")
+        out += [
+            f"  ▸ Run: {scripts}   (📘 manual, from the repository root; creates/updates an app registration)",
+            "  ▸ Needs permission to create app registrations; if blocked, ask an admin for a client ID and run "
+            f"`azd env set {ev.get('client_id_env') or 'AZURE_ENV_ENTRA_CLIENT_ID'} <client-id>` first.",
+            "  ▸ Then verify it as described in "
+            + ", ".join(auth.get("doc_refs", [])[:1] or ["the authentication guide"])
+            + f" ('{ev.get('verify_heading') or 'Verify'}'), and re-run the health check.",
+        ]
     if (
         a.get("chat_test")
         and health

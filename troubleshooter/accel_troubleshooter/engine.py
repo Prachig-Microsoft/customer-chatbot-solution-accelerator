@@ -28,6 +28,7 @@ NEEDS_RG = {
     "network.public_access",
     "webapp.state",
     "webapp.health",
+    "auth.setup",
     "rbac.app_identity",
     "rbac.deployer_data",
     "appinsights.errors",
@@ -36,6 +37,7 @@ NEEDS_RG = {
 DEPENDS = {
     "appinsights.errors": ["rg.state", "resources.state", "az.context"],
     "chat.e2e": ["rg.state", "resources.state", "webapp.state"],
+    "auth.setup": ["webapp.state"],
     "rbac.app_identity": ["webapp.state"],
     "webapp.health": ["webapp.state"],
     "config.compare": ["webapp.state"],

@@ -39,6 +39,16 @@
     "param_doc": "documents/CustomizingAzdParameters.md"
   },
   "policy_exemption_tag": {"name": "SecurityControl", "value": "Ignore"},
+  "auth_setup": {
+    "optional": true,
+    "doc": "documents/AppAuthentication.md",
+    "doc_heading": "Manual post-deployment configuration",
+    "verify_heading": "Verify the configuration",
+    "ps1": "infra/scripts/post-provision/configure_auth.ps1",
+    "sh": "infra/scripts/post-provision/configure_auth.sh",
+    "guide_step": "documents/DeploymentGuide.md (5.4 Configure Authentication (Optional))",
+    "client_id_env": "AZURE_ENV_ENTRA_CLIENT_ID"
+  },
   "chat_test": {
     "app": "chat-api",
     "path": "/api/chat/message",
@@ -66,6 +76,7 @@
       "required_settings_ref": "infra/bicep/main.bicep:460-516",
       "post_provision_settings": ["FOUNDRY_CHAT_AGENT", "FOUNDRY_PRODUCT_AGENT", "FOUNDRY_POLICY_AGENT"],
       "post_provision_ref": "infra/scripts/post-provision/agent_scripts/run_create_agents_scripts.ps1:391-397",
+      "auth_settings": ["ENTRA_AUTH_CLIENT_ID", "ENTRA_AUTH_TENANT_ID"],
       "expected_roles": [
         {"role": "Cognitive Services User", "role_id": "a97b65f3-24c7-4388-baec-2e87135dc908", "scope_env": "AI_FOUNDRY_RESOURCE_ID", "source": "infra/bicep/modules/identity/role-assignments.bicep:130"},
         {"role": "Search Index Data Contributor", "role_id": "8ebe5a00-799e-43f5-93ac-243d3dce84a7", "scope_env": "AI_SEARCH_SERVICE_RESOURCE_ID", "source": "infra/bicep/modules/identity/role-assignments.bicep:180"}
@@ -73,7 +84,7 @@
       "cosmos_data_role": {"role_id_suffix": "00000000-0000-0000-0000-000000000002", "source": "infra/bicep/modules/identity/role-assignments.bicep:194"}
     },
     {"id": "chat-web", "role": "frontend", "name_env": "CHAT_WEB_APP_NAME", "url_env": "CHAT_WEB_APP_URL"},
-    {"id": "scenario-api", "role": "backend", "name_env": "SCENARIO_API_APP_NAME", "url_env": "SCENARIO_API_APP_URL", "health_path": "/health"},
+    {"id": "scenario-api", "role": "backend", "name_env": "SCENARIO_API_APP_NAME", "url_env": "SCENARIO_API_APP_URL", "health_path": "/health", "auth_settings": ["ENTRA_AUTH_CLIENT_ID", "ENTRA_AUTH_TENANT_ID"]},
     {"id": "scenario-web", "role": "frontend", "name_env": "SCENARIO_WEB_APP_NAME", "url_env": "SCENARIO_WEB_APP_URL"}
   ],
   "placeholder_image_markers": ["containerapps-helloworld"],

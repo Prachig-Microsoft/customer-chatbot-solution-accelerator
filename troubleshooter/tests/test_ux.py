@@ -543,7 +543,7 @@ def test_parallel_checks_keep_their_own_commands_and_order(synthetic_fixture, sy
     assert all("providers" in c.command or "provider" in c.command for c in by_id["providers.registration"].commands)
     assert all("webapp" in c.command or "HTTP" in c.command for c in by_id["webapp.state"].commands)
     assert any("HTTP GET" in c.command for c in by_id["webapp.health"].commands)  # helper-thread probes are attributed
-    assert len(by_id["webapp.state"].commands) == 5  # 4 x show + 1 settings read, gathered from helper threads
+    assert len(by_id["webapp.state"].commands) == 6  # 4 x show + 2 settings reads (chat-api, scenario-api)
 
 
 def test_other_resource_group_ignores_the_azd_env_and_discovers_from_azure(synthetic_fixture, synthetic_env_file):
@@ -635,6 +635,7 @@ def test_skills_are_valid_slash_commands():
         h in health for h in ("**Verdict:**", "**Confirmed findings**", "**What passed**", "**Still unverified**")
     )
     assert health.rindex("**Sources**") > health.rindex("**Next step:**")  # sources come last, not inline
+    assert "OPTIONAL NEXT STEP" in health and "configure_auth" in health
     tags = ["**[Repo docs]**", "**[Repo code]**", "**[Live Azure]**", "**[External]**"]
     for name in ("health-check", "why-is-this-failing"):  # every source line says whether it is repo, live or external
         text = skills[name].read_text(encoding="utf-8")

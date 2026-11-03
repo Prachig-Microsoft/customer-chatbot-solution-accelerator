@@ -28,7 +28,9 @@ in the Sources block at the very bottom.
 - what the checks cannot prove (for example a real signed-in chat message), and any finding the report did not detail.
 
 **Next step:** one line with the smallest safe action and its category (🟢 read-only, 🟡 needs approval, 📘 manual,
-🔴 restricted). When everything looks healthy but the report says a real chat reply is "Not proven yet", the next step
+🔴 restricted). When the report has an **OPTIONAL NEXT STEP** (Microsoft Entra sign-in), add it as a second line, 📘
+manual: name the script from the report (`configure_auth.ps1` / `.sh`) and say it comes after the post-provision steps
+(if those are still pending, say finish them first); never run it yourself. When everything looks healthy but the report says a real chat reply is "Not proven yet", the next step
 is the 🟡 real chat test: ask "Send one real test chat message with your sign-in (one model call, the test session is
 deleted afterwards)? yes / no" and call `chat_test` with `user_approved=true` only after yes.
 

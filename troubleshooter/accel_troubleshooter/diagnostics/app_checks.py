@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict
 
-from ..models import ERROR, FAIL, INFO, PASS, SKIP, CheckResult
+from ..models import ERROR, FAIL, INFO, PASS, SKIP, WARN, CheckResult
 from ..repo import _parse_dotenv
 from .azure_checks import _error_code, _need_rg
 from .base import DiagContext, check, parallel_map
@@ -91,7 +91,7 @@ def webapp_state(ctx: DiagContext) -> CheckResult:
             "placeholder": is_placeholder,
             "stopped": data.get("state") != "Running",
         }
-        if app.get("required_settings") or app.get("post_provision_settings"):
+        if app.get("required_settings") or app.get("post_provision_settings") or app.get("auth_settings"):
             ok, settings, _ = ctx.az(
                 "webapp", "config", "appsettings", "list", "--resource-group", ctx.resource_group, "--name", name
             )
@@ -205,6 +205,77 @@ def webapp_health(ctx: DiagContext) -> CheckResult:
             + "."
         ),
         evidence={"probes": rows},
+    )
+
+
+@check(
+    "auth.setup",
+    "Optional Microsoft Entra sign-in (post-provision step)",
+    needs_apps=True,
+    stages=["authentication", "post-deployment-script", "configuration", "runtime"],
+    order=43,
+)
+def auth_setup(ctx: DiagContext) -> CheckResult:
+    title = "Optional Microsoft Entra sign-in (post-provision step)"
+    setup = ctx.profile.get("auth_setup")
+    if not setup:
+        return CheckResult("auth.setup", title, SKIP, "This accelerator documents no authentication step.")
+    if skip := _need_rg(ctx, "auth.setup", title):
+        return skip
+    seen = ctx.facts.get("app_settings_names") or {}
+    rows, partial, unset = [], [], []
+    for app in ctx.profile.get("apps", []):
+        keys = app.get("auth_settings")
+        flags = seen.get(app["id"])
+        if not keys or flags is None:
+            continue
+        absent = [k for k in keys if flags.get(k) != "set"]
+        rows.append({"app": app["id"], "missing": absent})
+        if absent and len(absent) < len(keys):
+            partial.append(f"{app['id']} (missing {', '.join(absent)})")
+        elif absent:
+            unset.append(app["id"])
+    if not rows:
+        return CheckResult("auth.setup", title, SKIP, "App settings could not be read, so sign-in was not checked.")
+    pending = bool(ctx.facts.get("post_provision_settings_missing") or ctx.facts.get("placeholder_image_apps"))
+    ev = {
+        "apps": rows,
+        "optional": bool(setup.get("optional")),
+        "post_provision_pending": pending,
+        "script_ps1": setup.get("ps1"),
+        "script_sh": setup.get("sh"),
+        "client_id_env": setup.get("client_id_env"),
+        "guide_step": setup.get("guide_step"),
+        "verify_heading": setup.get("verify_heading"),
+    }
+    refs = [ctx.doc_ref(setup["doc"], setup.get("doc_heading", "")), setup.get("ps1", "")]
+    refs = [r for r in refs if r]
+    ctx.facts["auth_setup_state"] = "partial" if partial else "unset" if unset else "configured"
+    if partial:
+        return CheckResult(
+            "auth.setup",
+            title,
+            WARN,
+            "Sign-in is only partly configured: " + "; ".join(partial) + ". Re-run the authentication script.",
+            evidence=ev,
+            doc_refs=refs,
+        )
+    if unset:
+        return CheckResult(
+            "auth.setup",
+            title,
+            INFO,
+            f"Sign-in is not configured on {unset} (optional step; apps run in guest mode).",
+            evidence=ev,
+            doc_refs=refs,
+        )
+    return CheckResult(
+        "auth.setup",
+        title,
+        PASS,
+        f"Sign-in settings are set on {[r['app'] for r in rows]}.",
+        evidence=ev,
+        doc_refs=refs,
     )
 
 
