@@ -13,4 +13,5 @@ call the tool again with it as `note`.
 
 Remind them to read the row and remove anything specific to their tenant. **Only if the user asks you to add it**, insert
 the row after the stated line of the guide with your editor and show the change. Never add it on your own.
-End with "Sources": 🔬 the checks the draft was built from, 📘 the guide and line it goes next to.
+End with "Sources", each line starting with an origin tag: **[Live Azure]** 🔬 the checks the draft was built from;
+**[Repo docs]** 📘 the guide and line it goes next to.

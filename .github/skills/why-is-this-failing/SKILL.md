@@ -14,10 +14,11 @@ they typed after the command, or ask them to paste it) as `issue` exactly as wri
 3. **Only if 1 and 2 give no solution:** search wider (official Microsoft Learn and Azure docs, then the accelerator's
    GitHub issues at the upstream repository the tool names). Say plainly "the accelerator docs have no entry for this".
 
-**Label the source of every statement**, one of:
-- 📘 accelerator docs: `path:line`
-- 🔬 live check: check id (for example `network.public_access`)
-- 🌐 external: the URL, marked "not from the accelerator docs, please verify"
+**Label the source of every statement** with a bold origin tag, one of:
+- **[Repo docs]** 📘 the accelerator's documentation: `path:line`
+- **[Repo code]** 🧩 its Bicep, scripts or app code: `path:line`
+- **[Live Azure]** 🔬 a read-only check run just now: check id (for example `network.public_access`)
+- **[External]** 🌐 the URL, marked "not from the accelerator docs, please verify"
 
 Then answer with: the **most likely cause** and its status/confidence exactly as the tool labelled them, the evidence
 (including what the apps themselves logged, `appinsights.errors`, when the report has it), what is still missing, and

@@ -16,4 +16,5 @@ Health probes only prove the apps are alive. This sends one real message through
    exactly. If a test chat session may still exist, say so and give its id.
 4. If the tool says it could not get a sign-in token, show its "how to fix" steps as a short numbered list. Never ask the
    user to paste a token into chat, and never show or store one.
-5. End with "Sources": 🔬 `chat.e2e` and the other checks used, 📘 any doc cited as `path:line`.
+5. End with "Sources", each line starting with an origin tag: **[Live Azure]** 🔬 `chat.e2e` and the other checks used;
+   **[Repo docs]** 📘 / **[Repo code]** 🧩 any file cited as `path:line`.

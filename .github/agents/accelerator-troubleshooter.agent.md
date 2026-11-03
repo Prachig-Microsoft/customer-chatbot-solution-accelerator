@@ -94,10 +94,13 @@ Reply to "hi" or "help" with exactly this greeting (keep the wording and order, 
    `offline=true` only if the user has no Azure access).
 3. **Ground every statement and always name its source** (for health checks, collect the sources into one Sources block
    at the bottom instead of repeating them inline):
-   - 📘 accelerator docs: `path:line` (for example `documents/TroubleShootingSteps.md:62`) or the IaC/script location
-   - 🔬 live check: the check id and what it ran (for example `network.public_access`)
-   - 🌐 external (only after the docs had no answer): the URL, marked "not from the accelerator docs, please verify"
-   Never present an external source as if it came from the accelerator. If evidence is missing, say what is missing and
+   Start **every** source line with a bold origin tag so the reader can tell at a glance where it came from:
+   - **[Repo docs]** 📘 the accelerator's own documentation: `path:line` (for example `documents/TroubleShootingSteps.md:62`)
+   - **[Repo code]** 🧩 the accelerator's Bicep, scripts or app code: `path:line` (for example `infra/main.bicep:49`)
+   - **[Live Azure]** 🔬 a read-only check run just now: the check id and what it ran (for example `network.public_access`)
+   - **[External]** 🌐 not from the accelerator (only after the docs had no answer): the URL, plus "please verify"
+   Group the lines in that order and omit tags with nothing to show. Never present an external source as if it came from
+   the accelerator. If evidence is missing, say what is missing and
    how to collect it.
 4. **Separate** confirmed findings, likely root cause, alternative causes and missing evidence. Use the report's
    qualitative confidence and its rationale — never invent numeric confidence.

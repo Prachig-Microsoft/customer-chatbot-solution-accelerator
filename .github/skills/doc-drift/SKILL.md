@@ -11,4 +11,5 @@ disagrees (for example "docs say capacity 10, the template default is 50"), and 
 findings and in how many files. If there is none, say the docs match the template.
 
 Offer: "Want me to fix the top items in the docs?" and edit documentation only if the user says yes. Mention that
-`drift --format full --out drift.md` writes a PR-ready checklist. End with "Sources": the files and lines the tool cited.
+`drift --format full --out drift.md` writes a PR-ready checklist. End with "Sources", each line starting with an origin
+tag: **[Repo docs]** 📘 or **[Repo code]** 🧩 with the files and lines the tool cited.

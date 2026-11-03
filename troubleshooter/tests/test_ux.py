@@ -635,6 +635,12 @@ def test_skills_are_valid_slash_commands():
         h in health for h in ("**Verdict:**", "**Confirmed findings**", "**What passed**", "**Still unverified**")
     )
     assert health.rindex("**Sources**") > health.rindex("**Next step:**")  # sources come last, not inline
+    tags = ["**[Repo docs]**", "**[Repo code]**", "**[Live Azure]**", "**[External]**"]
+    for name in ("health-check", "why-is-this-failing"):  # every source line says whether it is repo, live or external
+        text = skills[name].read_text(encoding="utf-8")
+        assert all(t in text for t in tags), name
+    agent_text = (REPO_ROOT / ".github" / "agents" / "accelerator-troubleshooter.agent.md").read_text(encoding="utf-8")
+    assert all(t in agent_text for t in tags)
     agent = (REPO_ROOT / ".github" / "agents" / "accelerator-troubleshooter.agent.md").read_text(encoding="utf-8")
     assert "argument-hint:" in agent and "Report the tool's labels exactly" in agent
     assert agent.count("agent: accelerator-troubleshooter") >= 4 and "handoffs:" in agent  # clickable starter questions
