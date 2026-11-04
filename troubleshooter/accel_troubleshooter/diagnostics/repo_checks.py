@@ -60,8 +60,12 @@ def effective_model_requirements(ctx: DiagContext) -> List[Dict[str, Any]]:
     reqs = []
     for m in iac.get("models", []):
         name, name_src = resolve(m.get("name_param", ""))
+        if name is None and m.get("name_fixed"):
+            name, name_src = m["name_fixed"], "usageName metadata in the Bicep (derived)"
         version, _ = resolve(m.get("version_param", ""))
         cap, cap_src = resolve(m.get("capacity_param", ""))
+        if cap is None and m.get("capacity_fixed") is not None:
+            cap, cap_src = m["capacity_fixed"], "usageName metadata in the Bicep (derived)"
         sku = m.get("sku_fixed")
         sku_src = "profile (fixed)"
         if m.get("sku_param"):

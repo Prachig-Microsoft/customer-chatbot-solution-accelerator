@@ -7,11 +7,28 @@ argument-hint: optional AI region to evaluate, e.g. swedencentral
 Run the `preflight` tool of the accelerator-troubleshooter MCP server (pass `region` only if the user gave one). If the
 user asked specifically about quota or capacity, also call `quota_check`.
 
-Answer with: the **GO / NO-GO verdict first**, the recommended AI region and why, then **quota** (what the deployment
-needs versus what is free, read live from the user's Azure subscription; say which quota is one shared pool for the whole
-subscription and which is per region), then **blockers** (or "none"), then the exact next command.
+Then answer in **exactly this shape** (it matches what the team agreed on; use the tool's labels and numbers as written).
 
-State where the "needed" numbers came from (the tool names the file and line, or the azd environment value, or the
-parameters file) so the user can see that edits to the parameter file or Bicep were picked up. Keep it under ten
-bullets, use the tool's labels as written, and include the reminder about the `SecurityControl` tag when the tool shows
-it.
+First line, as a heading: `## ✅ GO`, `## 🛑 NO-GO` or `## ❔ NOT CHECKED` (never GO when the tool says NOT CHECKED). Then
+these bullets, in this order:
+
+- **Recommended AI region:** `<region>` — one clause on why (your azd choice, or best free quota) and that the live
+  checks confirm quota and availability of the models, versions and deployment types.
+- **Live quota (K TPM):** followed by a table with the columns **Model | Needed | Free | Scope**, one row per model.
+  Scope is "Subscription-wide shared pool" for global pools, or "Per region (`<region>`)" for regional ones.
+- **Needed values:** where each "needed" number came from, as links with file and line (the Bicep default, the
+  parameters file, or the azd environment value), plus one short sentence that tells whether switching regions would
+  change the quota (it does not for subscription-wide pools).
+- **Blockers:** none, or the blockers with the smallest fix. **Warnings:** one sentence on what the tool warned about
+  (for example missing azd values, documents that disagree with the template, uncommitted changes).
+- **Security reminder:** only when the tool shows the `SecurityControl` policy tag, one sentence on what it is.
+- **Next deployment command, only if you intend to provision/update:** then the exact command in a code block
+  (`azd up`). Say it was not run; never run it yourself.
+
+Mark anything that is your own interpretation "(my interpretation)". Then one line "Ask next: …" with two or three
+follow-ups, and last the **Sources**, one line each, starting with a bold origin tag in this order (leave out a tag that
+has nothing to show):
+- **[Repo docs]** 📘 the accelerator's own documentation: `path:line`.
+- **[Repo code]** 🧩 its Bicep, scripts or parameter files: `path:line`.
+- **[Live Azure]** 🔬 read-only checks run just now: the check ids (for example `quota.models`) and the command.
+- **[External]** 🌐 URLs, only if you used any (mark "not from the accelerator docs, please verify").

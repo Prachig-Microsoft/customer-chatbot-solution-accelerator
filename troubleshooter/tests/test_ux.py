@@ -607,6 +607,11 @@ def test_skills_are_valid_slash_commands():
         "draft-guide-entry",
         "doc-drift",
     ]  # every skill is in the greeting, in order
+    # a numbered item right under a bold heading is not rendered as a list (unless it is "1."): keep a blank line
+    lines = greeting.splitlines()
+    for i, line in enumerate(lines):
+        if _re.match(r"^> \d\. ", line):
+            assert lines[i - 1] == ">" or _re.match(r"^> \d\. ", lines[i - 1]), line
     tools = {
         "about_accelerator",
         "health_check",
@@ -637,7 +642,11 @@ def test_skills_are_valid_slash_commands():
     assert health.rindex("**Sources**") > health.rindex("**Next step:**")  # sources come last, not inline
     assert "OPTIONAL NEXT STEP" in health and "configure_auth" in health
     tags = ["**[Repo docs]**", "**[Repo code]**", "**[Live Azure]**", "**[External]**"]
-    for name in ("health-check", "why-is-this-failing"):  # every source line says whether it is repo, live or external
+    pre = skills["preflight"].read_text(encoding="utf-8")  # the answer shape is fixed, so it looks the same everywhere
+    assert all(h in pre for h in ("## ✅ GO", "**Recommended AI region:**", "**Live quota (K TPM):**", "**Blockers:**"))
+    assert "**Model | Needed | Free | Scope**" in pre and "**Next deployment command" in pre
+    assert pre.rindex("**Sources**") > pre.rindex("**Next deployment command")
+    for name in ("health-check", "why-is-this-failing", "preflight"):  # each source line says repo, live or external
         text = skills[name].read_text(encoding="utf-8")
         assert all(t in text for t in tags), name
     agent_text = (REPO_ROOT / ".github" / "agents" / "accelerator-troubleshooter.agent.md").read_text(encoding="utf-8")

@@ -554,6 +554,55 @@ def cmd_index(args) -> int:
     return EXIT_OK
 
 
+def _docs_lines(cov: Dict[str, Any]) -> List[str]:
+    """Human summary of what documentation was read, how the troubleshooting guides parsed, and what was skipped."""
+    kinds = ", ".join(f"{k} {n}" for k, n in sorted(cov["docs_by_kind"].items()))
+    out = [f"  ▸ Documents read: {cov['docs_read']} ({kinds}); {cov['passages']} searchable passages"]
+    if cov["troubleshooting_docs"]:
+        for g in cov["troubleshooting_docs"]:
+            out.append(f"  ▸ Troubleshooting guide: {g['path']} — {g['entries']} entries, {g['format']}")
+    else:
+        out.append("  ⚠️  No troubleshooting guide found: errors can only be matched to README sections and other docs")
+    rd = cov.get("readme") or {}
+    if rd:
+        out.append(
+            "  ▸ README: "
+            + f"{len(rd.get('headings', []))} headings"
+            + (f", prerequisites '{rd['prerequisites_section']}'" if rd.get("prerequisites_section") else "")
+            + (f", regions {', '.join(rd['regions_mentioned'][:6])}" if rd.get("regions_mentioned") else "")
+            + (", has a troubleshooting section" if rd.get("has_troubleshooting_section") else "")
+        )
+    if cov["docs_skipped"]:
+        reasons: Dict[str, int] = {}
+        for s in cov["docs_skipped"]:
+            reasons[s["reason"]] = reasons.get(s["reason"], 0) + 1
+        out.append("  ▸ Not read: " + "; ".join(f"{n} {r}" for r, n in sorted(reasons.items())))
+    if cov["unindexed_docs"]:
+        out.append(f"  ▸ Not in the index yet: {len(cov['unindexed_docs'])} (run `index --rebuild`)")
+    if cov["broken_local_links"]:
+        out.append(f"  ▸ Broken links inside the docs: {len(cov['broken_local_links'])} (see `index` for the list)")
+    return out
+
+
+def cmd_docs(args) -> int:
+    """What documentation of the accelerator in this workspace was read, and how."""
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    ts = _ts(args)
+    ident = ts.identify("azd up failed", args.accelerator)
+    if not ident.get("confident"):
+        print(ident.get("question") or "Could not identify the accelerator.", file=sys.stderr)
+        return EXIT_CLARIFY
+    pid = ident["accelerator"]
+    repo = ts.repo_for(pid)
+    if repo is None:
+        print(f"Repository for '{pid}' not found locally.", file=sys.stderr)
+        return EXIT_ERROR
+    idx = ts.index_for(pid, rebuild=args.rebuild)
+    print(f"DOCUMENTATION · {ts.profiles[pid]['name']} @ {(idx.meta.get('git') or {}).get('commit', '')[:7]}")
+    print("\n".join(_docs_lines(coverage(ts.profiles[pid], idx, repo))))
+    return EXIT_OK
+
+
 def cmd_checks(args) -> int:
     for cid, spec in sorted(CHECKS.items(), key=lambda kv: kv[1].order):
         print(f"{cid:28} azure={'y' if spec.needs_azure else 'n'} stages={','.join(spec.stages)}\n    {spec.title}")
@@ -746,6 +795,16 @@ def cmd_install(args) -> int:
     from . import install as install_mod
 
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if not args.target:
+        print(
+            "install needs the path of the repository to copy the tool INTO, and is run from the repository that\n"
+            "has the tool. If this repository already has a troubleshooter/ folder, it is installed: skip this\n"
+            "command and run  python -m accel_troubleshooter preflight  (or health).\n\n"
+            "To install into another repository, run from the source repository's troubleshooter folder:\n"
+            "  python -m accel_troubleshooter install <path-of-other-repo> --dry-run",
+            file=sys.stderr,
+        )
+        return EXIT_CLARIFY
     try:
         res = install_mod.install(Path(args.target), force=args.force, full=args.full, dry_run=args.dry_run)
     except ValueError as e:
@@ -758,10 +817,14 @@ def cmd_install(args) -> int:
         print("\n  Add this to .vscode/mcp.json:\n" + json.dumps(res["snippet"], indent=2))
     found = install_mod.detect(Path(res["target"]))
     print("\nDETECTED")
-    if found.get("confident"):
+    if found.get("confident") and found.get("auto_derived"):
+        print(f"  ✅ No shipped profile matches, so one was derived from the repository: {found['accelerator']}")
+        print("     Docs search, quota/model checks and generic Azure checks work now. To save and review it:")
+        print("     cd <that repo>/troubleshooter; python -m accel_troubleshooter init-profile")
+    elif found.get("confident"):
         print(f"  ✅ This repository is recognised as: {found['accelerator']}")
     else:
-        print("  ⚠️  No accelerator profile matches this repository yet.")
+        print("  ⚠️  This folder does not look like an azd accelerator (no azure.yaml or infra/main.bicep).")
         print("     Create troubleshooter/accel_troubleshooter/profiles/<id>.json (see README 'Extending').")
     print(
         "\nNEXT STEPS\n"
@@ -771,6 +834,55 @@ def cmd_install(args) -> int:
         "     send any message once (the MCP server starts with the first message), then ask 'hi'.\n"
         "  4. Commit .github/agents, .github/skills, .vscode/mcp.json and troubleshooter/ (not .runs/ or .cache/)."
     )
+    return EXIT_OK
+
+
+def cmd_init_profile(args) -> int:
+    """Save the profile derived from this repository so it can be reviewed, edited and committed."""
+    from .autoprofile import derive_profile
+    from .repo import PROFILES_DIR
+
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    ts = _ts(args)
+    prof = derive_profile(ts.workspace)
+    if prof is None:
+        print(
+            f"No azure.yaml or infra/main.bicep in {ts.workspace}: nothing to derive a profile from.", file=sys.stderr
+        )
+        return EXIT_ERROR
+    for key in ("auto_derived", "_profile_file"):
+        prof.pop(key, None)
+    prof["notes"] = (
+        "Derived from the repository by `init-profile`; review it. Docs search, quota/model checks and the generic "
+        "Azure checks apply; app-level checks need an `apps` section."
+    )
+    out = Path(args.out) if args.out else PROFILES_DIR / f"{prof['id']}.json"
+    kinds = {k: len(v) for k, v in prof["docs"].items()}
+    models = [f"{m['name_fixed']} {m['sku_fixed']} {m['capacity_fixed']}K" for m in prof["iac"]["models"]]
+    print(f"PROFILE · {prof['name']} (id {prof['id']})")
+    print(f"  ▸ Docs found: {sum(kinds.values())} ({', '.join(f'{k} {n}' for k, n in sorted(kinds.items()))})")
+    print(f"  ▸ Models from the Bicep usageName metadata: {', '.join(models) or 'none found'}")
+    print(f"  ▸ Providers from the Bicep: {', '.join(prof['required_providers']) or 'none found'}")
+    from .knowledge import build_index
+
+    print("\n".join(_docs_lines(coverage(prof, build_index(prof, ts.workspace), ts.workspace))))
+    todo = []
+    if "troubleshooting" not in prof["docs"]:
+        todo.append("no troubleshooting guide found: add one to docs/ so errors can be matched to it")
+    if not prof["iac"]["models"]:
+        todo.append("no model quota found in the Bicep: add `iac.models` if the accelerator deploys OpenAI models")
+    todo.append("optional: add `apps` (names, required settings, expected roles) to unlock app-level checks")
+    for t in todo:
+        print(f"  • Review: {t}")
+    if args.print:
+        print(json.dumps(prof, indent=2))
+        return EXIT_OK
+    if out.exists() and not args.force:
+        print(f"{out} already exists. Use --force to overwrite or --out <file> to write elsewhere.", file=sys.stderr)
+        return EXIT_ERROR
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(prof, indent=2) + "\n", encoding="utf-8")
+    print(f"  ▸ Saved {out}. Commit it with the troubleshooter folder.")
     return EXIT_OK
 
 
@@ -891,6 +1003,11 @@ def build_parser() -> argparse.ArgumentParser:
     ix.add_argument("--export", metavar="DIR", help="Write INDEX.md + per-accelerator JSON catalog to DIR")
     ix.set_defaults(func=cmd_index)
 
+    dc = sub.add_parser("docs", help="Which documents of this accelerator were read, how, and what was skipped")
+    dc.add_argument("--accelerator")
+    dc.add_argument("--rebuild", action="store_true", help="Re-read every document first")
+    dc.set_defaults(func=cmd_docs)
+
     ck = sub.add_parser("checks", help="List diagnostic checks")
     ck.set_defaults(func=cmd_checks)
 
@@ -948,11 +1065,21 @@ def build_parser() -> argparse.ArgumentParser:
     ins = sub.add_parser(
         "install", help="Copy the troubleshooter, agent, skills and MCP entry into another accelerator repository"
     )
-    ins.add_argument("target", help="Path of the other accelerator repository")
+    ins.add_argument(
+        "target", nargs="?", help="Path of the other accelerator repository (run this from the repo that has the tool)"
+    )
     ins.add_argument("--force", action="store_true", help="Overwrite files that already exist in the target")
     ins.add_argument("--full", action="store_true", help="Also copy tests, evals and the demo script")
     ins.add_argument("--dry-run", action="store_true", help="Show what would happen without writing anything")
     ins.set_defaults(func=cmd_install)
+
+    ip = sub.add_parser(
+        "init-profile", help="Save the profile derived from this repository (azure.yaml, Bicep, docs) for review"
+    )
+    ip.add_argument("--out", help="Write the profile here instead of accel_troubleshooter/profiles/<id>.json")
+    ip.add_argument("--print", action="store_true", help="Show the profile as JSON without saving it")
+    ip.add_argument("--force", action="store_true", help="Overwrite an existing profile file")
+    ip.set_defaults(func=cmd_init_profile)
     return p
 
 

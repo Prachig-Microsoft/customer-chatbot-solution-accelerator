@@ -229,7 +229,20 @@ once a chat session exists, so send one message first), then run **Developer: Re
 `python -m accel_troubleshooter index --export knowledge` writes [`knowledge/INDEX.md`](knowledge/INDEX.md): every
 documented error code per accelerator with category, services, commands and an exact `path:line` reference at the
 indexed commit, plus document coverage gaps and broken local links. The runtime index is cached in `.cache/` and
-rebuilt automatically when any indexed file's hash changes (`index` shows freshness).
+rebuilt automatically when any indexed file's hash changes or a new document appears (`index` shows freshness).
+
+**Every document is read** (`docscan.py`), whether or not a profile lists it: all `.md`/`.mdx`/`.rst` files in the
+repository (and `.txt` under a docs folder), skipping vendored folders, the troubleshooter's own files and boilerplate
+(license, conduct, security, templates). Notebooks and files over 400 KB are listed as not read, never silently dropped.
+Troubleshooting guides and READMEs get extra attention:
+- a guide is recognised by its name *or* its content (a table of errors with resolutions), so a vaguely named file is
+  still found; a generic FAQ heading in an unrelated document is not enough;
+- a guide that is a `| **Code** |` table, any other error table, or plain question headings (FAQ style) is split into
+  one searchable entry per row or heading, each with its file and line;
+- every README in the repository is kept, and a "Troubleshooting" or "Known issues" section of *any* document is
+  ranked higher than an ordinary mention (guide sections x1.3, READMEs x1.15);
+- `python -m accel_troubleshooter docs` prints what was read per kind, how each guide parsed, what the root README
+  promises (prerequisites, regions, models, commands) and what was skipped and why. `index` has the full JSON.
 
 ## Tests and evaluation
 
@@ -279,9 +292,15 @@ alone and the snippet is printed). Existing files are never overwritten without 
 
 The accelerator is recognised from `azure.yaml`, the git remote and marker files, and the repo in the current workspace
 is always tried first, whatever the folder is called. The three shipped profiles (Customer Chatbot, Content Processing,
-Chat With Your Data) work immediately. A **new** accelerator needs a profile file first
-(`accel_troubleshooter/profiles/<id>.json`; see "Extending to another accelerator"); without one the tool asks which
-accelerator you mean instead of guessing.
+Chat With Your Data) work immediately. **Any other azd/Bicep accelerator also works with no setup:** when no shipped
+profile matches the workspace, the tool derives one from the repository itself (`autoprofile.py`): name and remote from
+`azure.yaml` and git, docs from `README.md` and `docs/` grouped by file name (troubleshooting, deployment, quota, auth, ...),
+model quota from the Bicep `usageName` metadata, parameter names and azd keys from `main.bicep` and
+`main.parameters.json`, and required providers from the Bicep resources and AVM modules. Docs search, `preflight` (quota and
+model availability) and the generic Azure checks then work; app-level checks do not (they need an `apps` section).
+`python -m accel_troubleshooter init-profile` saves the derived profile as `profiles/<id>.json` so you can review, correct
+and commit it; a saved profile then takes over from the derived one. A folder with neither `azure.yaml` nor
+`infra/main.bicep` is not an accelerator, so the tool asks instead of guessing.
 
 Manual alternative: copy the `troubleshooter/` folder and the files above by hand.
 
@@ -413,7 +432,11 @@ Cleanup: `azd down --purge --force`. Everything the agent runs is read-only exce
 
 ## Extending to another accelerator
 
-1. Add `accel_troubleshooter/profiles/<id>.json`, copying an existing profile. Fill in the fingerprint, docs per
+Usually nothing is needed: an azd/Bicep accelerator with no shipped profile gets one derived from its repository (see
+"Using it in another accelerator"); `init-profile` saves it. Write or edit a profile by hand when you want more than the
+derived one (app-level checks, resource-name patterns, a policy tag, a chat test):
+
+1. Add `accel_troubleshooter/profiles/<id>.json`, copying an existing profile (or run `init-profile`). Fill in the fingerprint, docs per
    category, `iac.models` (Bicep parameter names) and `azd_env_keys`.
 2. Run `python -m accel_troubleshooter index --accelerator <id>` and check `coverage` for missing or unindexed docs.
 3. Optional: add `apps`/`expected_roles`/`post_provision` for app-level checks, new checks in `diagnostics/`

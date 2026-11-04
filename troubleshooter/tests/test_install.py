@@ -75,5 +75,13 @@ def test_installed_copy_runs_on_its_own_and_recognises_the_accelerator(tmp_path)
         stdin=subprocess.DEVNULL,
         timeout=120,
     )
-    assert out.returncode in (0, 2), out.stderr  # 2 = asks which accelerator; never a crash
-    assert json.loads(out.stdout)["accelerator"] in ("content-processing", None)
+    assert out.returncode == 0, out.stderr  # a repo no shipped profile matches now gets one derived from itself
+    assert json.loads(out.stdout)["accelerator"] == "content-processing-solution-accelerator"
+
+
+def test_install_without_a_target_explains_what_to_do(capsys):
+    from accel_troubleshooter.cli import main
+
+    assert main(["install"]) == 2
+    err = capsys.readouterr().err
+    assert "already has a troubleshooter/ folder" in err and "install <path-of-other-repo>" in err

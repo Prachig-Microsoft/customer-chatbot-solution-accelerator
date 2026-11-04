@@ -62,11 +62,13 @@ def test_freshness_detects_changed_doc(chatbot_copy):
     assert "documents/QuotaCheck.md" in freshness(idx, chatbot_copy)["changed_files"]
 
 
-def test_coverage_reports_missing_and_unindexed_docs(chatbot_copy):
-    prof, _ = _chatbot_index(chatbot_copy)
+def test_coverage_reports_missing_docs_and_every_new_doc_is_picked_up(chatbot_copy):
+    prof, old = _chatbot_index(chatbot_copy)
     (chatbot_copy / "documents" / "AppAuthentication.md").unlink()
-    (chatbot_copy / "documents" / "NewGuide.md").write_text("# New\n", encoding="utf-8")
-    idx = build_index(prof, chatbot_copy)
+    (chatbot_copy / "documents" / "NewGuide.md").write_text("# New\n\nSomething new to read.\n", encoding="utf-8")
+    assert "documents/NewGuide.md" in freshness(old, chatbot_copy)["added_files"]  # noticed without a rebuild
+    assert "documents/NewGuide.md" in coverage(prof, old, chatbot_copy)["unindexed_docs"]
+    idx = build_index(prof, chatbot_copy)  # the profile does not list it, but every document is read
     cov = coverage(prof, idx, chatbot_copy)
     assert "documents/AppAuthentication.md" in cov["categories"]["auth"]["missing"]
-    assert "documents/NewGuide.md" in cov["unindexed_docs"]
+    assert "documents/NewGuide.md" in idx.meta["files"] and "documents/NewGuide.md" not in cov["unindexed_docs"]

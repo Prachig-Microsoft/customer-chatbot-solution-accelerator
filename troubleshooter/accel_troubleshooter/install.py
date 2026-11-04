@@ -118,4 +118,7 @@ def detect(target: Path) -> Dict[str, Any]:
     from .engine import Troubleshooter
 
     ts = Troubleshooter(target, OfflineRunner())
-    return ts.identify("azd up failed", None)
+    found = ts.identify("azd up failed", None)
+    prof = ts.profiles.get(found.get("accelerator") or "", {})
+    found["auto_derived"] = bool(prof.get("auto_derived"))
+    return found

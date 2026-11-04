@@ -15,11 +15,13 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from .docscan import readme_facts, scan_docs
 from .models import DocPassage
 from .repo import TOOL_ROOT, git_info
 
 CACHE_DIR = TOOL_ROOT / ".cache"
-INDEX_VERSION = 2
+INDEX_VERSION = 3
+_TROUBLE_HEADING = re.compile(r"troubleshoot|common (issues|errors|problems)|known (issues|problems)|\bfaq\b", re.I)
 
 SERVICE_KEYWORDS = {
     "Azure OpenAI": ["openai", "gpt", "embedding", "tpm", "model deployment", "deploymentmodelnotsupported"],
@@ -136,7 +138,7 @@ def parse_markdown(path: Path, rel: str, accel: str, repo_meta: Dict[str, str], 
                         commit=repo_meta.get("commit", ""),
                         branch=repo_meta.get("branch", ""),
                         doc_type="doc-section",
-                        category=doc_kind,
+                        category="troubleshooting" if _TROUBLE_HEADING.search(heading) else doc_kind,
                         services=_services_for(heading + " " + text),
                         commands=_commands(text),
                         error_codes=sorted(set(c for c in _ERROR_CODE.findall(text) if _looks_like_error_code(c))),
@@ -181,7 +183,59 @@ def parse_markdown(path: Path, rel: str, accel: str, repo_meta: Dict[str, str], 
                 continue
         sec_lines.append(line)
     flush(len(lines))
+    if doc_kind == "troubleshooting" and not any(p.doc_type == "troubleshooting-row" for p in passages):
+        passages = _fallback_entries(lines, passages, rel, accel, repo_meta, title)
     return passages
+
+
+def _fallback_entries(
+    lines: List[str], sections: List[DocPassage], rel: str, accel: str, repo_meta: Dict[str, str], title: str
+) -> List[DocPassage]:
+    """Troubleshooting docs that are not a ``| **Code** |`` table: any error table, else one entry per heading (FAQ)."""
+    rows: List[DocPassage] = []
+    heading, in_code = title, False
+    for idx, line in enumerate(lines, start=1):
+        if line.strip().startswith("```"):
+            in_code = not in_code
+        if not in_code and re.match(r"^#{1,4}\s", line):
+            heading = line.lstrip("#").strip()
+            continue
+        nxt = lines[idx] if idx < len(lines) else ""
+        if in_code or not line.startswith("|") or re.fullmatch(r"[|\s:-]+", line) or re.fullmatch(r"[|\s:-]+", nxt):
+            continue  # not a data row (a header row is the one right above the |---| separator)
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) < 2 or not cells[0]:
+            continue
+        codes = _split_codes(cells[0].replace("`", ""))
+        tokens = re.findall(r"`([^`]+)`", cells[0]) + [
+            t for t in _ERROR_CODE.findall(cells[0]) if _looks_like_error_code(t)
+        ]
+        rows.append(
+            DocPassage(
+                id=f"{accel}:{rel}:{idx}",
+                accelerator=accel,
+                title=" / ".join(codes) or cells[0],
+                path=rel,
+                section=re.sub(r"[^\w &-]", "", heading).strip(),
+                line_start=idx,
+                line_end=idx,
+                repo=repo_meta.get("remote", ""),
+                commit=repo_meta.get("commit", ""),
+                branch=repo_meta.get("branch", ""),
+                doc_type="troubleshooting-row",
+                category=_category_from_heading(heading),
+                error_codes=list(dict.fromkeys(tokens)) or codes[:1],
+                services=_services_for(line),
+                commands=_commands(line),
+                text=_strip_html(" | ".join(cells))[:6000],
+            )
+        )
+    if rows:
+        return sections + rows
+    for p in sections:  # question-and-answer style: every section is one entry
+        p.doc_type, p.title = "troubleshooting-row", p.section
+        p.category = _category_from_heading(p.section)
+    return sections
 
 
 def _looks_like_error_code(token: str) -> bool:
@@ -276,6 +330,10 @@ class KnowledgeIndex:
                 score *= 0.6
             elif p.category == "summary":
                 score *= 0.5
+            elif p.doc_type == "doc-section" and p.category == "troubleshooting":
+                score *= 1.3  # a troubleshooting guide, or the troubleshooting section of any document
+            elif p.path.lower().endswith(("readme.md", "readme.mdx", "readme.rst")):
+                score *= 1.15
             if score > 0:
                 scored.append((score, i))
         scored.sort(reverse=True)
@@ -326,6 +384,15 @@ def build_index(profile: Dict[str, Any], repo: Path) -> KnowledgeIndex:
             continue
         files[rel] = _sha1(path)
         passages.extend(parse_markdown(path, rel, accel, meta_git, kind))
+    survey = scan_docs(repo)
+    if profile.get("index_all_docs", True):  # every document, not only the ones the profile lists
+        listed = {f.lower() for f in files}
+        for kind, rels in survey["docs"].items():
+            for rel in rels:
+                if rel.lower() in listed:
+                    continue
+                files[rel] = _sha1(repo / rel)
+                passages.extend(parse_markdown(repo / rel, rel, accel, meta_git, kind))
     seen = set(files)
     for pattern in profile.get("source_globs", []):
         for path in sorted(repo.glob(pattern)):
@@ -340,6 +407,11 @@ def build_index(profile: Dict[str, Any], repo: Path) -> KnowledgeIndex:
         "git": meta_git,
         "files": files,
         "missing_docs": missing,
+        "survey": {
+            "docs_found": survey["found"],
+            "kinds": {k: len(v) for k, v in survey["docs"].items()},
+            "skipped": survey["skipped"][:200],
+        },
         "built_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "profile_file": profile.get("_profile_file"),
     }
@@ -378,45 +450,70 @@ def freshness(idx: KnowledgeIndex, repo: Path) -> Dict[str, Any]:
             removed.append(rel)
         elif _sha1(p) != sha:
             stale.append(rel)
+    known = {f.lower() for f in idx.meta.get("files", {})}
+    added = [f for f in scan_docs(repo, classify=False)["files"] if f.lower() not in known]  # documents added since
     current = git_info(repo)
     return {
-        "stale": stale + removed,
+        "stale": stale + removed + added,
         "changed_files": stale,
         "removed_files": removed,
+        "added_files": added,
         "indexed_commit": idx.meta.get("git", {}).get("commit"),
         "current_commit": current.get("commit"),
         "built_at": idx.meta.get("built_at"),
     }
 
 
+def _guide_format(rows: List[DocPassage]) -> str:
+    if not rows:
+        return "no entries found (read as plain sections)"
+    return "table rows" if any(" | " in r.text for r in rows) else "one entry per heading (FAQ style)"
+
+
 def coverage(profile: Dict[str, Any], idx: KnowledgeIndex, repo: Path) -> Dict[str, Any]:
-    """Documentation coverage: profile categories present, unindexed docs, broken local links."""
+    """Documentation coverage: what was read and skipped, how the troubleshooting guides parsed, broken links."""
     kinds = {}
     for kind, rel in _doc_files(profile):
         kinds.setdefault(kind, {"present": [], "missing": []})
         kinds[kind]["present" if (repo / rel).exists() else "missing"].append(rel)
     indexed = set(idx.meta.get("files", {}))
-    unindexed = []
-    for d in ("documents", "docs"):
-        if (repo / d).exists():
-            unindexed += [
-                p.relative_to(repo).as_posix()
-                for p in (repo / d).glob("*.md")
-                if p.relative_to(repo).as_posix() not in indexed
-            ]
+    survey = scan_docs(repo)
+    unindexed = [rel for rel in survey["files"] if rel.lower() not in {i.lower() for i in indexed}]
     broken = []
     for rel in indexed:
         if not rel.endswith(".md"):
             continue
         src = repo / rel
+        if not src.exists():
+            continue  # removed since the index was built
         for n, line in enumerate(src.read_text(encoding="utf-8", errors="ignore").splitlines(), start=1):
             for target in re.findall(r"\]\((?!https?:|#|mailto:)([^)\s#]+)", line):
                 if not (src.parent / target).exists():
                     broken.append({"file": rel, "line": n, "target": target})
     ts_rows = [p for p in idx.passages if p.doc_type == "troubleshooting-row"]
+    guides = sorted(
+        {
+            rel
+            for rel in indexed
+            if rel.lower().endswith((".md", ".mdx", ".rst", ".txt"))
+            and (
+                rel in (profile.get("docs", {}).get("troubleshooting") or [])
+                or rel in survey["docs"].get("troubleshooting", [])
+            )
+        }
+    )
+    guide_rows = {g: [p for p in ts_rows if p.path == g] for g in guides}
+    readme = repo / "README.md"
     return {
         "categories": kinds,
         "unindexed_docs": sorted(unindexed),
+        "docs_read": len([f for f in indexed if f.lower().endswith((".md", ".mdx", ".rst", ".txt"))]),
+        "docs_by_kind": {k: len(v) for k, v in survey["docs"].items()},
+        "docs_skipped": survey["skipped"],
+        "troubleshooting_docs": [
+            {"path": g, "entries": len(r), "format": _guide_format(r)} for g, r in guide_rows.items()
+        ],
+        "readme": readme_facts(readme) if readme.exists() else {},
         "broken_local_links": broken,
         "troubleshooting_rows": len(ts_rows),
         "known_error_codes": len(idx.known_error_codes),

@@ -15,7 +15,17 @@ from .classify import classify, extract, identify_accelerator
 from .diagnostics import CHECKS, DiagContext, run_check
 from .knowledge import KnowledgeIndex, freshness, load_or_build
 from .models import Action, CheckResult, DocPassage, Hypothesis, IssueContext
-from .repo import DEFAULT_WORKSPACE, AzdEnv, git_info, load_azd_env, load_env_file, load_profiles, resolve_repo
+from .autoprofile import derive_profile
+from .repo import (
+    DEFAULT_WORKSPACE,
+    AzdEnv,
+    fingerprint_score,
+    git_info,
+    load_azd_env,
+    load_env_file,
+    load_profiles,
+    resolve_repo,
+)
 
 ALWAYS = ["repo.azd_env", "repo.config_drift", "az.context"]
 # Checks that need a resource group (the group is resolved once, up front, so a prompt happens at most once).
@@ -103,8 +113,17 @@ class Troubleshooter:
         self.workspace = (workspace or DEFAULT_WORKSPACE).resolve()
         self.runner = runner or AzRunner()
         self.profiles = load_profiles()
+        self._add_derived_profile()
         self.repo_overrides = repo_overrides or {}
         self._indexes: Dict[str, KnowledgeIndex] = {}
+
+    def _add_derived_profile(self) -> None:
+        """An accelerator with no shipped profile gets one derived from its own repository (azd + Bicep + docs)."""
+        if any(fingerprint_score(p, self.workspace)[0] >= 2 for p in self.profiles.values()):
+            return
+        derived = derive_profile(self.workspace)
+        if derived and derived["id"] not in self.profiles:
+            self.profiles[derived["id"]] = derived
 
     # ------------------------------------------------------------------ helpers
     def repo_for(self, accel: str) -> Optional[Path]:
