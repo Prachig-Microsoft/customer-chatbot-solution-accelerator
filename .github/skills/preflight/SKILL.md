@@ -13,7 +13,10 @@ First line, as a heading: `## ✅ GO`, `## 🛑 NO-GO` or `## ❔ NOT CHECKED` (
 these bullets, in this order:
 
 - **Recommended AI region:** `<region>` — one clause on why (your azd choice, or best free quota) and that the live
-  checks confirm quota and availability of the models, versions and deployment types.
+  checks confirm quota and availability of the models, versions and deployment types. When the report says model quota
+  is **not applicable** (the accelerator deploys no Azure OpenAI models), say that instead, give the verdict from the
+  other checks (login, providers, configuration), and in the quota bullet write one sentence rather than a table.
+  Never invent a model table.
 - **Live quota (K TPM):** followed by a table with the columns **Model | Needed | Free | Scope**, one row per model.
   Scope is "Subscription-wide shared pool" for global pools, or "Per region (`<region>`)" for regional ones.
 - **Needed values:** where each "needed" number came from, as links with file and line (the Bicep default, the

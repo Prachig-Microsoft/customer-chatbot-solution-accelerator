@@ -118,6 +118,14 @@ def _providers(repo: Path) -> List[str]:
     return sorted(found - NOT_WORTH_CHECKING)
 
 
+def _uses_models(repo: Path, providers: List[str]) -> bool:
+    """Does the Bicep deploy anything that needs model quota? (an AI services/ML provider, or a model name)"""
+    if {"Microsoft.CognitiveServices", "Microsoft.MachineLearningServices"} & set(providers):
+        return True
+    text = "\n".join(_read(p) for p in _bicep_files(repo))
+    return bool(re.search(r"\bgpt-|text-embedding|accounts/deployments|usageName", text))
+
+
 def _tokens(model: str) -> List[str]:
     return [t for t in re.split(r"[^a-z0-9]+", model.lower()) if len(t) >= 3 and not t.isdigit()]
 
@@ -212,6 +220,8 @@ def derive_profile(repo: Path) -> Optional[Dict[str, Any]]:
     }
     if ai_param:
         iac["ai_location_param"] = ai_param.name
+    if not iac["models"] and not _uses_models(repo, providers):
+        iac["no_model_quota"] = True  # nothing in the Bicep deploys a model, so "no quota to check" is the right answer
     if "location" in params:
         iac["location_param"] = "location"
     param_doc = next((d for d in docs.get("deployment", []) if re.search(r"customi|parameter", d, re.I)), None)

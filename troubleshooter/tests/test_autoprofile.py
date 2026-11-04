@@ -101,3 +101,37 @@ def test_init_profile_saves_a_reviewable_file_and_refuses_to_overwrite(tmp_path,
     assert "gpt-4o GlobalStandard 150K" in capsys.readouterr().out
     assert main(["--workspace", str(repo), "init-profile", "--out", str(out)]) == 3  # exists: needs --force
     assert main(["--workspace", str(repo), "init-profile", "--out", str(out), "--force"]) == 0
+
+
+def test_an_accelerator_with_no_models_gets_go_not_not_checked(tmp_path):
+    from accel_troubleshooter.azcli import ReplayRunner
+    from accel_troubleshooter.compact import render_compact
+
+    (tmp_path / "infra").mkdir()
+    (tmp_path / "azure.yaml").write_text("name: stream-demo\n", encoding="utf-8")
+    (tmp_path / "infra" / "main.bicep").write_text(
+        "param location string = resourceGroup().location\n"
+        "resource hub 'Microsoft.EventHub/namespaces@2024-01-01' = { name: 'eh', location: location }\n",
+        encoding="utf-8",
+    )
+    profile = derive_profile(tmp_path)
+    assert profile["iac"]["models"] == [] and profile["iac"]["no_model_quota"]
+    fx = {
+        "commands": {"account show": {"exit_code": 0, "stdout": {"name": "sub", "id": "x", "user": {"type": "user"}}}}
+    }
+    ts = Troubleshooter(tmp_path, ReplayRunner(fx))
+    d = ts.diagnose(
+        "preflight before azd up", log=False, only_checks=["az.context", "quota.models", "models.availability"]
+    )
+    text = render_compact(d.to_dict(), "preflight")
+    assert "PREFLIGHT: ✅ GO" in text and "Model quota: not applicable" in text and "NOT CHECKED" not in text
+
+
+def test_models_the_bicep_mentions_but_we_could_not_read_are_not_waved_through(tmp_path):
+    (tmp_path / "infra").mkdir()
+    (tmp_path / "azure.yaml").write_text("name: llm-demo\n", encoding="utf-8")
+    (tmp_path / "infra" / "main.bicep").write_text(
+        "resource d 'Microsoft.CognitiveServices/accounts/deployments@2024-01-01' = { name: 'gpt-4o' }\n",
+        encoding="utf-8",
+    )
+    assert "no_model_quota" not in derive_profile(tmp_path)["iac"]  # a model is deployed: quota must be checked

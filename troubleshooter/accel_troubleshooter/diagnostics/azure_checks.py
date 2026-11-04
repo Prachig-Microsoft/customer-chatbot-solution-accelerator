@@ -480,6 +480,14 @@ def quota_models(ctx: DiagContext) -> CheckResult:
     title = "Model quota vs required capacity"
     reqs = effective_model_requirements(ctx)
     if not reqs:
+        if ctx.profile.get("iac", {}).get("no_model_quota"):
+            return CheckResult(
+                "quota.models",
+                title,
+                PASS,
+                "Not applicable: this accelerator's Bicep deploys no Azure OpenAI models, so no model quota to check.",
+                evidence={"not_applicable": True, "requirements": [], "regions": {}},
+            )
         return CheckResult("quota.models", title, SKIP, "Profile defines no model deployments.")
     allowed = ctx.facts.get("allowed_ai_regions") or []
     target = ctx.ai_region
@@ -563,8 +571,10 @@ def quota_models(ctx: DiagContext) -> CheckResult:
 )
 def models_availability(ctx: DiagContext) -> CheckResult:
     title = "Model/version/deployment-type availability in region"
-    region = ctx.ai_region
     reqs = effective_model_requirements(ctx)
+    if not reqs:
+        return CheckResult("models.availability", title, SKIP, "No models are deployed by this accelerator.")
+    region = ctx.ai_region
     if not region and ctx.facts.get("quota_candidate_regions"):
         # Preflight without a chosen region: validate the top quota-recommended region.
         region = ctx.facts["quota_candidate_regions"][0]

@@ -239,15 +239,19 @@ def render_preflight(d: Dict[str, Any], plain: bool = False) -> str:
     verdict = ("NO-GO" if plain else "🛑 NO-GO") if blocking else ("GO" if plain else "✅ GO")
     out = [f"PREFLIGHT: {verdict} · {a.get('id', '?')} · subscription {sub} · {d['duration_ms'] / 1000:.0f}s"]
 
+    qev = (_check(d, "quota.models") or {}).get("evidence", {})
+    n_a = bool(qev.get("not_applicable"))
     region = rec["region"]
-    out.append(f"  ▸ AI region: {region or 'none usable'} — {rec['why']}")
+    if n_a:
+        out.append("  ▸ Model quota: not applicable — this accelerator's Bicep deploys no Azure OpenAI models")
+    else:
+        out.append(f"  ▸ AI region: {region or 'none usable'} — {rec['why']}")
     env_ev = rec["env"]
     loc = env_ev.get("location")
     if loc:
         out.append(f"  ▸ Primary location: {loc} — your azd env")
     elif rec["locations"]:
         out.append(f"  ▸ Primary location: any of {', '.join(rec['locations'])}")
-    qev = (_check(d, "quota.models") or {}).get("evidence", {})
     rows = (qev.get("regions") or {}).get(region or "", {}).get("models", []) if region else []
     if rows:
         parts = [f"{r['model']} need {r['capacity']} / free {r['available']}{'' if r['ok'] else ' ❌'}" for r in rows]
@@ -265,6 +269,8 @@ def render_preflight(d: Dict[str, Any], plain: bool = False) -> str:
     marks = []
     for cid, label in names.items():
         c = _check(d, cid)
+        if cid == "quota.models" and n_a:
+            continue  # nothing was checked, so no tick
         if c and c["status"] != "skip":
             marks.append(f"{icons[c['status']].strip()} {label}")
     out.append("  ▸ Checks: " + "   ".join(marks))
@@ -288,7 +294,9 @@ def render_preflight(d: Dict[str, Any], plain: bool = False) -> str:
         out.append(f"      {ev.get('snippet')}")
 
     steps: List[str] = []
-    if not blocking and region:
+    if not blocking and n_a:
+        steps.append("python -m accel_troubleshooter run -- azd up")
+    elif not blocking and region:
         if not env_ev.get("env_name"):
             steps += ["azd env new <name>", f"azd env set AZURE_ENV_AI_SERVICE_LOCATION {region}"]
         elif env_ev.get("ai_location") != region:
