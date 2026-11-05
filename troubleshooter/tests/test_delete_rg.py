@@ -231,26 +231,109 @@ def test_cli_refuses_to_delete_in_replay_or_offline_mode(capsys):
     assert rc == 3 and "live Azure access" in capsys.readouterr().err
 
 
-def test_mcp_tool_passes_only_what_it_was_given():
+# --------------------------------------------------------------------------- chat: the user confirms in forms
+
+
+CHECKS_OK = (
+    "DELETE CHECKS (read again from Azure just now)\n"
+    f"  ✔ {RG} exists in subscription demo (eastus2), 2 resource(s), 0 lock(s)\n"
+    "  and the plan fingerprint is: abc1234567\n"
+)
+
+
+class _Ctx:
+    """Stands in for the MCP context: each elicit() returns the next scripted answer (what the USER typed)."""
+
+    def __init__(self, *answers, unsupported=False):
+        self.answers, self.asked, self.unsupported = list(answers), [], unsupported
+
+    async def elicit(self, message, schema):
+        from types import SimpleNamespace
+
+        if self.unsupported:
+            raise RuntimeError("Method not found: elicitation")
+        self.asked.append(message)
+        action, value = self.answers.pop(0)
+        if action != "accept":
+            return SimpleNamespace(action=action, data=None)
+        field = next(iter(schema.model_fields))
+        return SimpleNamespace(action="accept", data=schema(**{field: value}))
+
+
+def _tool(ctx, checks=CHECKS_OK):
+    import asyncio
+
     pytest.importorskip("mcp")
     from accel_troubleshooter import mcp_server
 
     seen = []
     orig = mcp_server._cli
-    mcp_server._cli = lambda args, timeout=0: seen.append(args) or "ok"
+    mcp_server._cli = lambda args, timeout=0: seen.append(args) or (checks if "--confirm" not in args else "DELETED")
     try:
-        mcp_server.delete_resource_group(RG)
-        assert "--confirm-name" not in seen[-1] and "--delete" in seen[-1]  # step 1: checks only
-        mcp_server.delete_resource_group(RG, confirm_name=RG, confirm_phrase=f"delete {RG}", fingerprint="abc")
-        assert seen[-1][-6:] == ["--confirm-name", RG, "--confirm", f"delete {RG}", "--fingerprint", "abc"]
+        out = asyncio.run(mcp_server.delete_resource_group(RG, ctx))
     finally:
         mcp_server._cli = orig
+    return out, seen
 
 
-def test_agent_and_skill_require_two_typed_confirmations():
+def test_chat_delete_runs_only_after_the_user_typed_both_answers_in_forms():
+    ctx = _Ctx(("accept", RG), ("accept", f"delete {RG}"))
+    out, seen = _tool(ctx)
+    assert out == "DELETED" and len(ctx.asked) == 2
+    assert "2 resource(s)" in ctx.asked[0] and f"delete {RG}" in ctx.asked[1]
+    assert seen[-1][-6:] == ["--confirm-name", RG, "--confirm", f"delete {RG}", "--fingerprint", "abc1234567"]
+
+
+def test_the_model_cannot_supply_confirmations():
+    import inspect
+
+    pytest.importorskip("mcp")
+    from accel_troubleshooter import mcp_server
+
+    params = set(inspect.signature(mcp_server.delete_resource_group).parameters)
+    assert params == {"resource_group", "ctx", "accelerator"}  # no name/phrase/fingerprint the model could fill in
+
+
+@pytest.mark.parametrize(
+    "answers,why",
+    [
+        ((("cancel", None),), "cancelled at the first"),
+        ((("decline", None),), "cancelled at the first"),
+        ((("accept", "rg-demo"),), "not exactly"),
+        ((("accept", RG), ("cancel", None)), "cancelled at the second"),
+    ],
+)
+def test_a_cancel_or_a_wrong_name_in_the_form_deletes_nothing(answers, why):
+    out, seen = _tool(_Ctx(*answers))
+    assert why in out and not any("--confirm" in a for a in seen)
+
+
+def test_a_wrong_second_phrase_is_refused_by_the_cli_check():
+    ctx = _Ctx(("accept", RG), ("accept", "yes"))
+    _, seen = _tool(ctx)
+    assert seen[-1][seen[-1].index("--confirm") + 1] == "yes"  # passed through as typed; the CLI refuses it
+
+
+def test_blockers_mean_no_form_is_shown():
+    ctx = _Ctx(("accept", RG))
+    out, seen = _tool(ctx, checks="DELETE CHECKS\n  ✖ resource lock(s) on the group: keep (CanNotDelete)\n")
+    assert "NOT DELETED" in out and ctx.asked == [] and len(seen) == 1
+
+
+def test_a_client_without_forms_gets_the_terminal_route_and_nothing_is_deleted():
+    out, seen = _tool(_Ctx(unsupported=True))
+    assert "cannot show the confirmation form" in out and f"cleanup --delete --resource-group {RG}" in out
+    assert len(seen) == 1
+
+
+def test_the_agent_cannot_run_commands_and_never_collects_the_confirmations():
     agent = (REPO_ROOT / ".github" / "agents" / "accelerator-troubleshooter.agent.md").read_text(encoding="utf-8")
+    tools_line = next(line for line in agent.splitlines() if line.startswith("tools:"))
+    assert "runCommands" not in tools_line and "terminal" not in tools_line.lower()
+    assert "you never" in agent and "supply a name or a confirmation" in agent
+    assert "never ask the user to type them in chat" in agent
     skill = (REPO_ROOT / ".github" / "skills" / "cleanup-resources" / "SKILL.md").read_text(encoding="utf-8")
-    assert "type the exact name" in agent and "Type `delete <name>`" in agent
-    assert "exactly what the" in agent and "never do steps 1 and 4 in the same turn" in agent
-    assert "Never delete more than that one group" in agent
-    assert "two-confirmation procedure" in skill and "One resource group only" in skill
+    assert "confirmation forms" in skill and "One resource group only" in skill
+    for path in (REPO_ROOT / ".github" / "skills").glob("*/SKILL.md"):
+        text = path.read_text(encoding="utf-8")
+        assert "same read-only query" not in text, path  # skills must not ask the agent to run commands itself

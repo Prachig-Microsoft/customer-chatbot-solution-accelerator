@@ -10,13 +10,16 @@ Remediation: read-only tools never change anything. Two tools act on the user's 
 passes ``user_approved=true`` (the agent instructions allow that only after the user said yes): ``apply_fix`` (runs one
 allow-listed fix, then verifies and re-checks health) and ``chat_test`` (sends one real chat message and deletes the
 test session). ``draft_guide_entry`` only prints a draft; it never edits the guide. ``delete_resource_group`` is the
-only destructive tool: it deletes one resource group, and only when called with the exact name and the phrase
-``delete <name>`` that the user typed, plus the fingerprint of the plan they saw; the group is re-checked first.
+only destructive tool: it deletes one resource group, and only after the server itself asked the user, in two
+confirmation forms the model cannot see or fill, to type the exact name and then ``delete <name>``; the group is
+re-checked before and right before deleting.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
+import re
 import subprocess
 import sys
 from typing import List, Optional
@@ -25,7 +28,8 @@ from .actions import EXECUTABLE_ACTIONS
 from .repo import TOOL_ROOT
 
 try:
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.fastmcp import Context, FastMCP
+    from pydantic import BaseModel, Field
 except ImportError as exc:  # pragma: no cover - optional dependency
     raise SystemExit("The 'mcp' package is required: pip install -r troubleshooter/requirements-mcp.txt") from exc
 
@@ -111,27 +115,58 @@ def cleanup_plan(resource_group: Optional[str] = None, accelerator: Optional[str
     return _cli(["cleanup", *_common(accelerator, resource_group, None)])
 
 
+class ConfirmName(BaseModel):
+    resource_group: str = Field(description="Type the exact name of the resource group to delete (case-sensitive)")
+
+
+class ConfirmPhrase(BaseModel):
+    confirmation: str = Field(description="Type exactly: delete <resource-group-name>")
+
+
+_FP = re.compile(r"plan fingerprint is:\s*([0-9a-f]{6,})")
+_SUMMARY = re.compile(r"^\s*✔ (.+resource\(s\).+lock\(s\))\s*$", re.M)
+TERMINAL_ROUTE = "python -m accel_troubleshooter cleanup --delete --resource-group {rg}"
+
+
 @mcp.tool()
-def delete_resource_group(
-    resource_group: str,
-    confirm_name: Optional[str] = None,
-    confirm_phrase: Optional[str] = None,
-    fingerprint: Optional[str] = None,
-    accelerator: Optional[str] = None,
-) -> str:
-    """DESTRUCTIVE: deletes exactly one resource group and everything in it (az group delete). Two calls:
-    (1) call with only resource_group: it re-checks the group in Azure (exists, subscription, locks, what is inside)
-    and returns the checks plus a plan fingerprint, deleting nothing; show that to the user.
-    (2) only after the user has TYPED the exact group name in one message and then, in a later message, typed
-    'delete <name>', call again with confirm_name and confirm_phrase set to exactly what the user typed and the
-    fingerprint from step 1. Never fill these in yourself, never reuse earlier text, never call step 2 in the same turn
-    as step 1. The group is read again before deleting; if anything changed, it refuses."""
-    args = ["cleanup", "--delete", *_common(accelerator, resource_group, None)]
-    if confirm_name is not None and confirm_phrase is not None:
-        args += ["--confirm-name", confirm_name, "--confirm", confirm_phrase]
-        if fingerprint:
-            args += ["--fingerprint", fingerprint]
-    return _cli(args, timeout=FIX_TIMEOUT)
+async def delete_resource_group(resource_group: str, ctx: Context, accelerator: Optional[str] = None) -> str:
+    """DESTRUCTIVE: deletes exactly one resource group and everything in it (az group delete). Call it once with the
+    group the user asked to delete. The tool re-checks the group in Azure (exists, subscription, locks, contents), then
+    asks the USER directly in two VS Code input forms to type the exact name and then 'delete <name>'; you never see
+    or supply those answers. Anything other than an exact match, a cancel, or a change to the group deletes nothing.
+    If the client cannot show forms, it deletes nothing and gives the terminal command instead."""
+    rg = resource_group
+    base = ["cleanup", "--delete", *_common(accelerator, rg, None)]
+    checks = await asyncio.to_thread(_cli, base)
+    found = _FP.search(checks)
+    if not found:
+        return checks + "\n\nNOT DELETED: the checks above block it (or the group could not be read)."
+    fp = found.group(1)
+    what = _SUMMARY.search(checks)
+    what_text = what.group(1) if what else f"{rg} and everything in it"
+    try:
+        first = await ctx.elicit(
+            message=(
+                f"⚠ Permanently delete the resource group '{rg}'? ({what_text}). This cannot be undone.\n"
+                "Type the exact name of the resource group to continue."
+            ),
+            schema=ConfirmName,
+        )
+    except Exception:  # noqa: BLE001 - client without elicitation support
+        return (
+            checks + "\n\nNOT DELETED: this chat client cannot show the confirmation form. Run it in your own terminal "
+            "(it asks both questions there): " + TERMINAL_ROUTE.format(rg=rg)
+        )
+    if first.action != "accept" or first.data is None:
+        return "NOT DELETED: you cancelled at the first confirmation."
+    name = first.data.resource_group
+    if name != rg:
+        return f"NOT DELETED: the name typed was not exactly '{rg}'. Nothing was changed."
+    second = await ctx.elicit(message=f"Last check. Type exactly:  delete {rg}", schema=ConfirmPhrase)
+    if second.action != "accept" or second.data is None:
+        return "NOT DELETED: you cancelled at the second confirmation."
+    args = base + ["--confirm-name", name, "--confirm", second.data.confirmation, "--fingerprint", fp]
+    return await asyncio.to_thread(_cli, args, FIX_TIMEOUT)
 
 
 @mcp.tool()

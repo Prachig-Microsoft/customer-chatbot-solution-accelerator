@@ -418,7 +418,10 @@ operation, kept out of the approved-fix path (`apply_fix` cannot reach it), and 
    for you to run (it never purges), and appends a record to `.runs/deletions.jsonl`.
 
 In a terminal: `python -m accel_troubleshooter cleanup --delete --resource-group <name>` (asks both questions). In chat
-the agent asks you to type the name, then the phrase, in two separate messages, and passes exactly what you typed.
+the tool itself asks you in two VS Code confirmation forms (MCP elicitation) that the model can neither see nor fill;
+the tool only takes the group name, so the model cannot supply a confirmation. A client without confirmation forms gets
+the terminal command instead, and nothing is deleted. The chat agent has no terminal access (`runCommands` is not in
+its tool list), so it cannot run `azd down`, `az group delete` or any other command directly.
 
 ### Draft a guide entry (`draft-guide`, chat tool `draft_guide_entry`)
 Turns a diagnosed incident into one row in the guide's own table format

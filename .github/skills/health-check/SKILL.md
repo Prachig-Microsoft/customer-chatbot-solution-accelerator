@@ -17,7 +17,7 @@ in the Sources block at the very bottom.
 
 **Confirmed findings** (RG `<resource group>`, region `<region>`)
 - one bullet per finding, with ⚠️ / ❌ / ℹ️ and plain-language detail (what, which resource, when). If the report gives no
-  detail for a warning, you may read it with the same read-only query and say so.
+  detail for a warning, say so (you cannot run commands; use `diagnose` or `search_docs` if more detail is needed).
 - anything that is your own interpretation rather than a tool label must be marked "(my interpretation)".
 
 **What passed**

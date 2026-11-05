@@ -11,14 +11,15 @@ because Azure keeps it after deletion), **Watch out** (locks, resources not crea
 capacity that keeps billing while Active), **What the accelerator says** (its `predown` hook, teardown script and the
 document lines the tool cites), **Steps** (the tool's commands, in order, in code blocks), "Ask next", then **Sources**.
 
-In "Ask next", offer: "I can delete this resource group for you: you type its exact name, then confirm once more."
+In "Ask next", offer: "I can delete this resource group for you: you will be asked to type its exact name, then to
+confirm once more, in confirmation forms."
 
-If the user wants the agent to delete it, follow the agent's **two-confirmation procedure** for `delete_resource_group`
-exactly: first call it with only `resource_group` (nothing is deleted) and show its checks; ask the user to type the
-exact name; then ask them to type `delete <name>`; only then call it again with those two texts exactly as the user
-typed them and the fingerprint. One resource group only. Never run `azd down`, a purge, a lock removal or a
-pause/resume yourself. Mention that a plain group delete skips the accelerator's `predown` hook when the tool says so,
-and that `azd down` is the route that runs it.
+If the user wants the agent to delete it, call `delete_resource_group` once with the group name. The tool re-checks the
+group and then asks the user itself, in two VS Code confirmation forms you cannot see or fill, to type the exact name and
+then `delete <name>`. Do not ask for those in chat and never pass them yourself. One resource group only. You cannot
+run commands: never offer to run `azd down`, a purge, a lock removal or a pause/resume. If the tool says the client
+cannot show confirmation forms, give the terminal command it prints. Mention that a plain group delete skips the
+accelerator's `predown` hook when the tool says so, and that `azd down` is the route that runs it.
 
 If a Fabric capacity exists, also mention pausing it as the cheaper alternative when they only want to stop billing but
 keep the data.
