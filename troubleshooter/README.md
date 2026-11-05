@@ -198,25 +198,28 @@ infra/main.bicep:98 default").
 (`python troubleshooter/mcp_launcher.py`, with no `cwd` or `${workspaceFolder}` so it starts from any host; requires
 `pip install -r troubleshooter/requirements-mcp.txt`). Its tools are
 `identify_accelerator`, `about_accelerator`, `search_docs`, `health_check`, `diagnose`, `quota_check`, `preflight`,
-`doc_drift`, `draft_guide_entry` and `list_checks` (all read-only; `draft_guide_entry` only prints a draft) plus two
+`doc_drift`, `draft_guide_entry`, `resume_plan`, `cleanup_plan` and `list_checks` (all read-only; `draft_guide_entry` only
+prints a draft, and the resume and cleanup tools only print commands for you to run) plus two
 gated tools that act for the user and refuse unless the user approved that exact action: **`apply_fix`** (one
 allow-listed fix) and **`chat_test`** (one real chat message, see "Real chat test"). Every tool runs the same CLI in a
 fresh process, so **chat and terminal always give the same findings**. In VS Code, pick the **accelerator-troubleshooter**
 custom agent in Copilot Chat and
-say hi (the agent replies with a grouped menu of the seven questions below), or type `/` and use one of them (skills in
+say hi (the agent replies with a grouped menu of the nine questions below), or type `/` and use one of them (skills in
 `.github/skills/`; type the command, then your text):
 
 | Slash command | When | What you get |
 |---|---|---|
 | `/about-accelerator` | first | accelerator name, 2-3 lines from its README (with file:line), Azure services, docs searched first |
-| `/preflight` | before `azd up` | GO / NO-GO, recommended region, quota needed vs free (live from your subscription), blockers |
-| `/health-check [rg-name]` | after `azd up` | health of the current azd env, or of any resource group you name, including what the apps logged |
+| `/preflight` | before `azd up` | GO / NO-GO, recommended region, quota needed vs free (live from your subscription), the tools and versions the docs ask for versus what is installed, blockers |
+| `/health-check [rg-name]` | after `azd up` | health of the current azd env, or of any resource group you name, including what the apps logged and the Fabric capacity state (Active / Paused) |
 | `/prove-chat-works` | after a healthy check | asks first, then sends ONE real chat message with your sign-in and deletes the test session |
+| `/resume-deployment [rg-name]` | `azd up` stopped halfway | where it stopped and whether a re-run is safe: NOTHING TO RESUME, WAIT, FIX FIRST, SAFE TO RESUME; the exact command, never run for you |
+| `/cleanup-resources [rg-name]` | before `azd down` | what would be deleted, locks and soft-deleted resources that need a purge, the accelerator's own teardown (`predown` hook, script, doc lines) and the commands; deletes nothing |
 | `/why-is-this-failing <error>` | on an error | the accelerator's docs first, then live checks, then (only if no solution) wider sources; every statement names its source (📘 docs path:line, 🔬 live check id, 🌐 external URL) |
 | `/draft-guide-entry <error>` | after fixing something new | a ready-to-paste, generalised troubleshooting-guide row with its section and line (prints only) |
-| `/doc-drift` | maintainers | where the docs and scripts disagree with the Bicep and parameter files, with file, line and fix |
+| `/doc-drift` | maintainers | where the docs and scripts disagree with the Bicep and parameter files, with file, line and fix; also saves `.runs/document-gaps.md` |
 
-The terminal equivalents are `about`, `preflight`, `health`, `chat-test`, `diagnose`, `draft-guide` and `drift`. When
+The terminal equivalents are `about`, `preflight`, `health`, `chat-test`, `resume`, `cleanup`, `diagnose`, `draft-guide` and `drift`. When
 `diagnose` finds no documented cause it
 ends with "NOT IN THE ACCELERATOR DOCS?" and links to a GitHub-issues search and Microsoft Learn, labelled as external.
 
@@ -269,7 +272,7 @@ hypothesis, cited docs). `python -m accel_troubleshooter stats` aggregates it.
 ## Using it in another accelerator
 
 The tool needs only Python 3.10+ and the Azure CLI. One command copies everything (the tool, the Copilot agent, the
-seven starter-question skills and the MCP entry) and tells you whether the target repo is recognised:
+nine starter-question skills and the MCP entry) and tells you whether the target repo is recognised:
 
 ```powershell
 # from this repo's troubleshooter folder; add --dry-run first to preview, --force to update an existing install
@@ -286,7 +289,7 @@ Then, in the other repository:
    keeps `.runs/` and `.cache/` out).
 
 What it copies: `troubleshooter/` (runtime only; add `--full` for tests, evals and the demo script),
-`.github/agents/accelerator-troubleshooter.agent.md`, `.github/skills/<7 skills>/SKILL.md`, and the
+`.github/agents/accelerator-troubleshooter.agent.md`, `.github/skills/<9 skills>/SKILL.md`, and the
 `accelerator-troubleshooter` server merged into `.vscode/mcp.json` (other servers are kept; a file with comments is left
 alone and the snippet is printed). Existing files are never overwritten without `--force`.
 
@@ -351,6 +354,48 @@ that the template does not use, broken relative links (GitHub root-relative link
 scripts a doc tells you to run that do not exist. Every finding names the file and line and how to fix it;
 `drift --format full --out drift.md` writes a PR-ready checklist. Doc findings are low severity: they never become a
 "cause" in a health check.
+
+Every `drift` run (and `/doc-drift` in chat) also saves **`troubleshooter/.runs/document-gaps.md`**, a local,
+git-ignored list of everything the documentation is missing or gets wrong: the drift findings, documents that ask for
+**different versions of the same tool** (for example Python 3.9+ in one and 3.11 in another), a missing troubleshooting
+guide, guides with no recognisable entries, a README without a prerequisites section, documents the profile expects
+but the repository lacks, and broken links. `drift --no-save` skips the file.
+
+### Tools and versions (preflight, `repo.tools`)
+`preflight` also compares what the documents ask for with what is installed on this machine (`azd`, `az`, `python`,
+`node`, `pwsh`, `docker`, `git`, `dotnet`, `terraform`, `kubectl`; fixed read-only `--version` calls, nothing else is
+run). Minimum versions come from `azure.yaml` `requiredVersions` (azd refuses to run below it: a blocker) and from
+prerequisite sections and version mentions in the README and deployment guides, each with its file and line. A missing
+`azd`/`az` is a blocker; other missing or old tools are warnings, and a tool the docs call optional (for example Docker
+for the Dev Container route) is only informational. `az extension add --name X` lines in docs and scripts are checked
+against `az extension list`. Other tools found on the machine are listed as "also installed".
+
+### Fabric capacity (`azure.fabric`, part of every health check)
+For accelerators that deploy a `Microsoft.Fabric/capacities` resource (or record `AZURE_FABRIC_CAPACITY_NAME`), the
+health check reads its state with `az resource show`: **Active** passes, **Paused** is a confirmed cause (Fabric items
+are unavailable until it is resumed) with a resume command shown but never run (billing restarts), **Suspended** or
+**Failed** is a failure, transitions are informational. It is skipped quietly when there is no capacity. Fabric
+workspace and item checks (REST API) are not built yet.
+
+### Resume a halted deployment (`resume`, chat tool `resume_plan`)
+Azure cannot continue a half-finished ARM deployment, but `azd provision` re-applies the template and only creates
+what is missing, so a re-run is usually safe once the cause of the stop is gone. `resume` reads the deployment
+history, resource states, the post-provision state and the Fabric capacity and says: **NOTHING TO RESUME**, **WAIT**
+(a deployment is still running; stuck for over an hour gets a cancel command), **FIX FIRST** (a repeatable cause such
+as quota, region, policy or a resource in a Failed state: re-running would stop at the same place), **SAFE TO RESUME**
+(`azd provision`) or **SAFE TO RESUME THE LAST STEP** (infrastructure is complete, the post-provision step is not:
+`azd hooks run postprovision` when `azure.yaml` defines it). Where the post-provision step cannot be verified it says
+so and never claims it finished. It runs nothing.
+
+### Guided cleanup (`cleanup`, chat tool `cleanup_plan`)
+Read-only and advisory: nothing is deleted by the tool or the agent. It lists what a cleanup would delete (resources by
+type), resource **locks** that block deletion, resources not tagged for this azd environment (deleting the group
+deletes them too, only reported when the group uses that tag), services Azure keeps after deletion and the exact
+purge commands (Cognitive Services, Key Vault, API Management, App Configuration), what the accelerator itself says
+(the `predown` hook in `azure.yaml`, teardown scripts, teardown lines in the documents, each with file and line), and the
+steps: Option A `azd down --purge --force` (which also runs the `predown` hook) and Option B delete the group then
+purge, with a note on what B skips. A Fabric capacity bills while Active even when idle: pausing it is the cheaper
+alternative when you want to keep the data.
 
 ### Draft a guide entry (`draft-guide`, chat tool `draft_guide_entry`)
 Turns a diagnosed incident into one row in the guide's own table format

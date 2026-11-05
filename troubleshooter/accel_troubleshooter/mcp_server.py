@@ -88,11 +88,29 @@ def identify_accelerator(issue: str, accelerator: Optional[str] = None) -> str:
 
 
 @mcp.tool()
+def resume_plan(resource_group: Optional[str] = None, accelerator: Optional[str] = None) -> str:
+    """Read-only assessment of a deployment that stopped halfway: where it stopped (resource group, infrastructure,
+    post-provision step, Fabric capacity), why, and whether re-running is safe (NOTHING TO RESUME, WAIT, FIX FIRST,
+    SAFE TO RESUME) with the exact command. Runs nothing. Use for 'can I resume my deployment?'."""
+    return _cli(["resume", *_common(accelerator, resource_group, None)])
+
+
+@mcp.tool()
+def cleanup_plan(resource_group: Optional[str] = None, accelerator: Optional[str] = None) -> str:
+    """Read-only plan for cleaning up a deployment (azd down): what would be deleted, locks and soft-deleted resources
+    that need a purge, what the accelerator's own hooks and docs say, and the exact commands for the user to run.
+    Deletes nothing and never will: show the commands, never run them."""
+    return _cli(["cleanup", *_common(accelerator, resource_group, None)])
+
+
+@mcp.tool()
 def doc_drift(accelerator: Optional[str] = None) -> str:
     """Offline report of where the accelerator's docs and scripts disagree with its Bicep and parameter files (for
     example a documented default capacity that differs from the template, regions or models the template does not
-    use, undocumented variables, broken links). Each finding names the file and line to edit and how. Nothing is
-    changed. Use for 'is the documentation up to date?' or before a release."""
+    use, undocumented variables, broken links). Each finding names the file and line to edit and how. Nothing in the
+    repository is changed; the full list of document gaps (drift, tool versions that documents disagree on, missing
+    docs, broken links) is also saved to the local, git-ignored .runs/document-gaps.md. Use for 'is the documentation
+    up to date?' or before a release."""
     return _cli(["drift", "--no-color"] + (["--accelerator", accelerator] if accelerator else []), timeout=180)
 
 

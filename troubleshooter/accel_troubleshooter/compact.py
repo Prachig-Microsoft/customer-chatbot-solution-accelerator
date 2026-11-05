@@ -42,6 +42,9 @@ SHORT = {
     "models.availability": "model availability",
     "ai.deployments": "AI model deployments",
     "network.public_access": "network access",
+    "azure.fabric": "Fabric capacity state",
+    "repo.tools": "tools and versions",
+    "cleanup.inventory": "what a cleanup deletes",
     "webapp.state": "app services",
     "webapp.health": "health endpoints",
     "auth.setup": "sign-in (Entra, optional)",
@@ -264,6 +267,7 @@ def render_preflight(d: Dict[str, Any], plain: bool = False) -> str:
         "providers.registration": "providers",
         "quota.models": "quota",
         "models.availability": "models/SKUs",
+        "repo.tools": "tools",
         "repo.git_changes": "no local edits",
     }
     marks = []
@@ -274,6 +278,25 @@ def render_preflight(d: Dict[str, Any], plain: bool = False) -> str:
         if c and c["status"] != "skip":
             marks.append(f"{icons[c['status']].strip()} {label}")
     out.append("  ▸ Checks: " + "   ".join(marks))
+    tools = _check(d, "repo.tools")
+    if tools and tools["status"] != "skip":
+        ev = tools.get("evidence") or {}
+        sym = {"ok": "OK" if plain else "✅", "old": "!!" if plain else "⚠️", "missing": "!!" if plain else "⚠️"}
+        parts = []
+        for r in ev.get("tools", []):
+            if r["status"] == "unknown":
+                continue
+            have = r["installed"] or "not installed"
+            need = f" (needs {r['required']})" if r.get("min") else ""
+            parts.append(f"{sym.get(r['status'], '')} {r['tool']} {have}{need}".strip())
+        if parts:
+            out.append("  ▸ Tools (as the docs ask): " + " · ".join(parts))
+        for e in ev.get("extensions", []):
+            if not e["ok"]:
+                out.append(f"  ▸ Azure CLI extension '{e['name']}' is not installed (docs: {e['sources'][0]})")
+        extra = ev.get("other_tools") or {}
+        if extra:
+            out.append("  ▸ Also installed: " + ", ".join(f"{k} {v}" for k, v in sorted(extra.items())))
     if blocking:
         out.append("  • Blocking:")
         for c in blocking[:4]:

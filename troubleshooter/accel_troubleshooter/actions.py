@@ -166,6 +166,22 @@ def build_action(action_id: str, profile: Dict[str, Any], **p: Any) -> Optional[
             params=p,
             doc_refs=[p.get("source", "")],
         )
+    if action_id == "resume-fabric-capacity":
+        name, rg = p["name"], p["resource_group"]
+        return Action(
+            action_id,
+            f"Resume the Fabric capacity {name}",
+            APPROVAL_REQUIRED,
+            "A paused Fabric capacity makes its workspaces and items unavailable. Resuming turns it back on.",
+            commands=[
+                f"az fabric capacity resume --resource-group {rg} --capacity-name {name}",
+                "(needs the extension: az extension add --name microsoft-fabric; or use Resume in the Azure portal)",
+            ],
+            risk="Billing starts again for the capacity SKU, per hour, until it is paused or deleted. Run it yourself: "
+            "the agent does not resume capacities.",
+            verify_checks=["azure.fabric"],
+            params={**p, "manual": True},
+        )
     if action_id == "azd-provision":
         return Action(
             action_id,

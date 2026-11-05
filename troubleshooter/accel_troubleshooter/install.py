@@ -25,6 +25,8 @@ SKILL_NAMES = [
     "why-is-this-failing",
     "draft-guide-entry",
     "doc-drift",
+    "resume-deployment",
+    "cleanup-resources",
 ]
 RUNTIME = ["accel_troubleshooter", "mcp_launcher.py", "requirements-mcp.txt", "README.md", ".gitignore"]
 GENERATED = {".venv", ".cache", ".runs", "__pycache__", ".pytest_cache", ".mypy_cache", "demo-output"}

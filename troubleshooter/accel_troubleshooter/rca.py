@@ -652,6 +652,39 @@ def partial_deployment(ctx):
 # --------------------------------------------------------------------------- app / post-provision
 
 
+@rule(28)
+def fabric_capacity_inactive(ctx):
+    rows = ctx.facts.get("fabric_capacities") or []
+    paused = [r for r in rows if str(r.get("state") or "").lower() in ("paused", "pausing")]
+    if not paused:
+        return []
+    acts = [
+        build_action("resume-fabric-capacity", ctx.profile, name=r["name"], resource_group=r["resource_group"])
+        for r in paused
+    ]
+    return [
+        (
+            Hypothesis(
+                "fabric-capacity-paused",
+                f"Fabric capacity is paused: {', '.join(r['name'] for r in paused)}",
+                CONFIRMED,
+                "high",
+                [
+                    f"'az resource show' reports state {paused[0].get('state')} for {paused[0]['name']} "
+                    f"({paused[0].get('sku') or 'unknown SKU'}) (live)",
+                    "a paused capacity makes its Fabric workspaces and items unavailable (general Fabric behaviour); "
+                    "anything that reads them, and post-provision steps that create items, fail until it is resumed",
+                ],
+                supporting_checks=["azure.fabric"],
+                missing_evidence=["who paused it and when (activity log: Microsoft.Fabric/capacities/suspend/action)"],
+                remediation_ids=[a.id for a in acts],
+                component="Microsoft Fabric capacity",
+            ),
+            acts,
+        )
+    ]
+
+
 @rule(29)
 def app_stopped(ctx):
     stopped = ctx.facts.get("stopped_apps") or []

@@ -311,6 +311,7 @@ def cmd_preflight(args) -> int:
             "repo.config_drift",
             "repo.git_changes",
             "repo.exemption_tag",
+            "repo.tools",
             "az.context",
             "providers.registration",
             "quota.models",
@@ -772,7 +773,64 @@ def cmd_drift(args) -> int:
     if args.out:
         Path(args.out).write_text(render_drift_markdown(report), encoding="utf-8")
         print(f"\nReport saved to {args.out}")
+    saved = _save_gaps(ts, diag, report) if not getattr(args, "no_save", False) else None
+    if saved:
+        # machine-readable output must stay valid JSON, so the notice goes to stderr then
+        print(
+            f"  ▸ All document gaps (drift, tool versions, missing docs, broken links) saved to {saved}",
+            file=sys.stderr if args.format == "json" else sys.stdout,
+        )
     return EXIT_FINDINGS if report["findings"] else EXIT_OK
+
+
+def _save_gaps(ts: Troubleshooter, diag, report: Dict[str, Any]):
+    """Write the local document-gaps file; never fails the command it is attached to."""
+    from .gaps import build_gaps, render_gaps, save_gaps
+    from .toolscan import scan_requirements
+
+    try:
+        pid = diag.accelerator.get("id")
+        repo = ts.repo_for(pid) if pid else None
+        if repo is None:
+            return None
+        cov = coverage(ts.profiles[pid], ts.index_for(pid), repo)
+        return save_gaps(render_gaps(build_gaps(report, cov, scan_requirements(repo))))
+    except OSError:
+        return None
+
+
+def cmd_resume(args) -> int:
+    """Can a halted deployment be resumed from where it stopped? (read-only: prints the verdict and the command)"""
+    from .resume import RESUME_CHECKS, build_resume_plan, render_resume
+
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    ts = _ts(args)
+    diag = _diagnose(ts, args, "deployment halted, can it be resumed", only_checks=RESUME_CHECKS)
+    if diag.clarification:
+        print(diag.clarification)
+        return EXIT_CLARIFY
+    repo = ts.repo_for(diag.accelerator.get("id")) if diag.accelerator.get("id") else None
+    plan = build_resume_plan(diag.to_dict(), repo)
+    print(json.dumps(plan, indent=2) if args.format == "json" else render_resume(plan, plain=args.plain))
+    _finish(ts, diag)
+    return EXIT_OK if plan["verdict"] in ("nothing",) else EXIT_FINDINGS
+
+
+def cmd_cleanup(args) -> int:
+    """Guided cleanup (azd down): what would be deleted, what blocks it, the commands to run. Deletes nothing."""
+    from .cleanup import CLEANUP_CHECKS, build_cleanup_plan, render_cleanup
+
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    ts = _ts(args)
+    diag = _diagnose(ts, args, "clean up the deployment (azd down)", only_checks=CLEANUP_CHECKS)
+    if diag.clarification:
+        print(diag.clarification)
+        return EXIT_CLARIFY
+    repo = ts.repo_for(diag.accelerator.get("id")) if diag.accelerator.get("id") else None
+    plan = build_cleanup_plan(diag.to_dict(), repo)
+    print(json.dumps(plan, indent=2) if args.format == "json" else render_cleanup(plan, plain=args.plain))
+    _finish(ts, diag)
+    return EXIT_OK
 
 
 def cmd_about(args) -> int:
@@ -1041,7 +1099,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     dr = sub.add_parser("drift", help="Where docs and scripts disagree with the Bicep/parameter files (offline)")
     common(dr, live=False)
+    dr.add_argument("--no-save", action="store_true", help="Do not write the local document-gaps file")
     dr.set_defaults(func=cmd_drift)
+
+    rs = sub.add_parser("resume", help="Can a halted deployment be resumed from where it stopped? (read-only)")
+    common(rs)
+    rs.set_defaults(func=cmd_resume)
+
+    cl = sub.add_parser("cleanup", help="Guided cleanup (azd down): what is deleted, what blocks it, the commands")
+    common(cl)
+    cl.set_defaults(func=cmd_cleanup)
 
     ct = sub.add_parser(
         "chat-test", help="Health check plus one real signed-in chat message (asks first; deletes the test session)"

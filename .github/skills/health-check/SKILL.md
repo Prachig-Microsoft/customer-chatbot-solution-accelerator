@@ -21,8 +21,8 @@ in the Sources block at the very bottom.
 - anything that is your own interpretation rather than a tool label must be marked "(my interpretation)".
 
 **What passed**
-- one short bullet per area (login and providers, resource group, quota and models, model deployments, apps and health
-  probes, app error logs, RBAC, config match).
+- one short bullet per area (login and providers, resource group, quota and models, model deployments, Fabric capacity
+  state when the report has one, apps and health probes, app error logs, RBAC, config match).
 
 **Still unverified**
 - what the checks cannot prove (for example a real signed-in chat message), and any finding the report did not detail.

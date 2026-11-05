@@ -56,7 +56,28 @@ READ_ONLY_PREFIXES = [
     "monitor activity-log list",
     "policy state list",
     "policy definition show",
+    "resource show",
+    "lock list",
+    "extension list",
 ]
+
+# Local tools whose installed version the preflight may read: fixed argv lists (never built from input) and a pattern
+# that pulls the version out of the output. Candidates are tried in order; the first that runs wins.
+LOCAL_TOOLS: Dict[str, Tuple[List[List[str]], str]] = {
+    "azd": ([["azd", "version"]], r"azd version (\d+(?:\.\d+)+)"),
+    "az": ([["az", "--version"]], r"azure-cli\s+(\d+(?:\.\d+)+)"),
+    "python": (
+        [["python", "--version"], ["python3", "--version"], ["py", "-3", "--version"]],
+        r"Python (\d+(?:\.\d+)+)",
+    ),
+    "node": ([["node", "--version"]], r"v?(\d+(?:\.\d+)+)"),
+    "pwsh": ([["pwsh", "--version"]], r"PowerShell (\d+(?:\.\d+)+)"),
+    "docker": ([["docker", "--version"]], r"Docker version (\d+(?:\.\d+)+)"),
+    "git": ([["git", "--version"]], r"git version (\d+(?:\.\d+)+)"),
+    "dotnet": ([["dotnet", "--version"]], r"(\d+(?:\.\d+)+)"),
+    "terraform": ([["terraform", "--version"]], r"Terraform v(\d+(?:\.\d+)+)"),
+    "kubectl": ([["kubectl", "version", "--client"]], r"Client Version: v(\d+(?:\.\d+)+)"),
+}
 
 ALLOWED_HTTP_HOST_SUFFIXES = (".azurewebsites.net", "localhost", "127.0.0.1")
 
@@ -245,6 +266,42 @@ class AzRunner:
             }
         return ok, data, rec
 
+    def local_version(self, tool: str, timeout: int = 20) -> Tuple[str, Optional[str], CommandRecord]:
+        """Installed version of a known local tool: ("found", "1.2.3") / ("missing", None) / ("unknown", None)."""
+        if tool not in LOCAL_TOOLS:
+            raise CommandNotAllowed(f"local tool not allowed: {tool}")
+        candidates, pattern = LOCAL_TOOLS[tool]
+        start = time.time()
+        last = ""
+        for argv in candidates:
+            exe = shutil.which(argv[0])
+            if not exe:
+                continue
+            try:
+                proc = subprocess.run(
+                    [exe, *argv[1:]],
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    encoding="utf-8",
+                    errors="replace",
+                    stdin=subprocess.DEVNULL,
+                )
+            except (subprocess.TimeoutExpired, OSError):
+                last = "did not run"
+                continue
+            m = re.search(pattern, (proc.stdout or "") + "\n" + (proc.stderr or ""))
+            if proc.returncode == 0 and m:
+                dur = int((time.time() - start) * 1000)
+                rec = CommandRecord(" ".join(argv), 0, _now(), dur, f"version {m.group(1)}", source="live")
+                self._log(rec)
+                return "found", m.group(1), rec
+            last = "no version in the output"
+        dur = int((time.time() - start) * 1000)
+        rec = CommandRecord(" ".join(candidates[0]), None, _now(), dur, last or "not installed", source="live")
+        self._log(rec)
+        return ("unknown" if last else "missing"), None, rec
+
     def http_get(self, url: str, timeout: int = 20) -> Tuple[bool, Dict[str, Any], CommandRecord]:
         host = urlparse(url).hostname or ""
         if not _host_allowed(host):
@@ -406,6 +463,24 @@ class ReplayRunner(AzRunner):
         self._log(rec)
         return ok, data, rec
 
+    def local_version(self, tool: str, timeout: int = 20):
+        if tool not in LOCAL_TOOLS:
+            raise CommandNotAllowed(f"local tool not allowed: {tool}")
+        fx = self._lookup(f"LOCAL {tool}")
+        label = " ".join(LOCAL_TOOLS[tool][0][0])
+        if fx is None:
+            rec = CommandRecord(label, None, _now(), 0, "no fixture", source="replay-missing")
+            self._log(rec)
+            return "unknown", None, rec
+        if fx.get("exit_code", 0) != 0:
+            rec = CommandRecord(label, fx.get("exit_code"), _now(), 0, "not installed", source="replay")
+            self._log(rec)
+            return "missing", None, rec
+        version = str(fx.get("stdout") or "")
+        rec = CommandRecord(label, 0, _now(), 0, f"version {version}", source="replay")
+        self._log(rec)
+        return "found", version, rec
+
     def http_get(self, url: str, timeout: int = 20) -> Tuple[bool, Dict[str, Any], CommandRecord]:
         fx = self._lookup(f"HTTP GET {url}")
         if fx is None:
@@ -464,6 +539,10 @@ class OfflineRunner(AzRunner):
         rec = CommandRecord("az " + " ".join(args), None, _now(), 0, "offline mode: not executed", source="skipped")
         self._log(rec)
         return False, {"error": "offline"}, rec
+
+    def local_version(self, tool, timeout=20):
+        rec = CommandRecord(tool, None, _now(), 0, "offline mode: not executed", source="skipped")
+        return "unknown", None, rec
 
     def http_get(self, url, timeout=20):
         rec = CommandRecord(f"HTTP GET {url}", None, _now(), 0, "offline mode: not executed", source="skipped")
