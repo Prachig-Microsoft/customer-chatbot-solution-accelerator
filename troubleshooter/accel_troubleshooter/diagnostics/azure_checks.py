@@ -224,8 +224,26 @@ def deploy_operations(ctx: DiagContext) -> CheckResult:
         }
         for d in deps[:10]
     ]
+    # azd tags its own top-level deployment with azd-env-name: its state tells whether azd finished provisioning
+    azd_deps = [
+        {
+            "name": d.get("name"),
+            "state": (d.get("properties") or {}).get("provisioningState"),
+            "timestamp": (d.get("properties") or {}).get("timestamp"),
+            "azd_env": (d.get("tags") or {}).get("azd-env-name"),
+            "reason": (d.get("tags") or {}).get("azd-deploy-reason"),
+        }
+        for d in deps
+        if (d.get("tags") or {}).get("azd-env-name")
+    ]
+    mine = [a for a in azd_deps if ctx.env.name and a["azd_env"] == ctx.env.name] or azd_deps
+    azd_dep = mine[0] if mine else None
     running = [d for d in summary if d["state"] in ("Running", "Accepted")]
-    failed = [d for d in deps if (d.get("properties") or {}).get("provisioningState") == "Failed"]
+    failed = [d for d in deps if (d.get("properties") or {}).get("provisioningState") in ("Failed", "Canceled")]
+    if azd_dep and azd_dep["state"] == "Succeeded":
+        # failures from before azd's last successful provision were fixed by that run: they are history, not state
+        done_at = azd_dep.get("timestamp") or ""
+        failed = [d for d in failed if ((d.get("properties") or {}).get("timestamp") or "") > done_at]
     errors: List[Dict[str, Any]] = []
     for d in failed[:3]:
         ok, ops, _ = ctx.az("deployment", "operation", "group", "list", "--resource-group", rg, "--name", d["name"])
@@ -262,8 +280,14 @@ def deploy_operations(ctx: DiagContext) -> CheckResult:
         running_deployments=running,
         deployments=summary,
         deployment_recent_minutes=recent_min,
+        azd_deployment=azd_dep,
     )
-    ev = {"recent_deployments": summary, "failed_operations": errors[:15], "progress": progress}
+    ev = {
+        "recent_deployments": summary,
+        "failed_operations": errors[:15],
+        "progress": progress,
+        "azd_deployment": azd_dep,
+    }
     if running:
         now = datetime.now(timezone.utc)
         stuck = []
@@ -321,7 +345,11 @@ def deploy_operations(ctx: DiagContext) -> CheckResult:
         "deploy.operations",
         title,
         PASS,
-        f"Latest deployment '{summary[0]['name']}' is {summary[0]['state']}.",
+        (
+            f"azd provision '{azd_dep['name']}' {azd_dep['state']}."
+            if azd_dep and azd_dep["state"] == "Succeeded"
+            else f"Latest deployment '{summary[0]['name']}' is {summary[0]['state']}."
+        ),
         evidence=ev,
     )
 

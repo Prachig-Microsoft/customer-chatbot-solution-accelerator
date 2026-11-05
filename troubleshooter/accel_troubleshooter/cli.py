@@ -800,20 +800,106 @@ def _save_gaps(ts: Troubleshooter, diag, report: Dict[str, Any]):
 
 
 def cmd_resume(args) -> int:
-    """Can a halted deployment be resumed from where it stopped? (read-only: prints the verdict and the command)"""
-    from .resume import RESUME_CHECKS, build_resume_plan, render_resume
+    """Where did a halted deployment stop and is a re-run safe? Full health check + the pasted error; can run the
+    fix or the resume command for you after you type yes."""
+    from .resume import build_resume_plan, render_resume
 
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    stdin_text = sys.stdin.read() if args.issue == "-" else None
+    pasted = build_issue(
+        args.issue, args.log, stdin_text, args.from_clipboard, runcmd.last_log_path() if args.last else None
+    )
+    interactive = sys.stdin.isatty() and not args.no_prompt and args.format != "json"
+    if not pasted and interactive:
+        pasted = read_multiline(
+            "If azd showed an error, paste it here so it is analysed too (optional).\n"
+            "(finish with two empty lines; just press Enter twice to skip)"
+        )
+    pasted = condense_log(pasted) if pasted else ""
+    if args.format != "json":
+        print(
+            "Running the full health check" + (" and analysing your error" if pasted else "") + "...", file=sys.stderr
+        )
     ts = _ts(args)
-    diag = _diagnose(ts, args, "deployment halted, can it be resumed", only_checks=RESUME_CHECKS)
+    diag = _diagnose(ts, args, "deployment stopped halfway, can it be resumed. " + pasted, full=True)
     if diag.clarification:
         print(diag.clarification)
         return EXIT_CLARIFY
     repo = ts.repo_for(diag.accelerator.get("id")) if diag.accelerator.get("id") else None
-    plan = build_resume_plan(diag.to_dict(), repo)
-    print(json.dumps(plan, indent=2) if args.format == "json" else render_resume(plan, plain=args.plain))
+    plan = build_resume_plan(diag.to_dict(), repo, pasted)
+    if args.format == "json":
+        print(json.dumps(plan, indent=2))
+        return _finish(ts, diag)
+    print(render_resume(plan, plain=args.plain))
+    if args.out:
+        Path(args.out).write_text(render_markdown(diag.to_dict()), encoding="utf-8")
+        print(f"\nFull health-check report saved to {args.out}")
     _finish(ts, diag)
-    return EXIT_OK if plan["verdict"] in ("nothing",) else EXIT_FINDINGS
+    if not interactive:
+        if plan["run"]:
+            print(
+                "\n  ▸ To run it with automatic diagnosis on failure: "
+                f"python -m accel_troubleshooter run -- {' '.join(plan['run'])}"
+            )
+        return EXIT_OK if plan["verdict"] == "nothing" else EXIT_FINDINGS
+    return _resume_act(ts, args, diag, plan, repo)
+
+
+def _resume_act(ts: Troubleshooter, args, diag, plan: Dict[str, Any], repo) -> int:
+    """Offer to do the next step: an allow-listed fix (then re-check), or the resume command itself."""
+    if plan["verdict"] == "fix-first":
+        fix = next(
+            (
+                diag.actions[f["id"]]
+                for f in plan["fixes"]
+                if f["id"] in diag.actions
+                and f["category"] == APPROVAL_REQUIRED
+                and f["id"].split("#")[0] in actions_mod.EXECUTABLE_ACTIONS
+                and not diag.actions[f["id"]].params.get("manual")
+            ),
+            None,
+        )
+        if fix is None:
+            print("\nThe fix above is manual: do it, then run resume again.")
+            return EXIT_FINDINGS
+        _print_proposal(fix)
+        sys.stdout.write("\nApply this fix now? Type 'yes' to apply, anything else to skip: ")
+        sys.stdout.flush()
+        if sys.stdin.readline().strip().lower() not in ("yes", "y"):
+            print("Skipped. Nothing was changed.")
+            return EXIT_FINDINGS
+        _apply_and_recheck(ts, args, diag, fix, _overrides(args))
+        print("\nRun resume again to continue the deployment.")
+        return EXIT_OK
+    if not plan["run"] or repo is None:
+        return EXIT_OK if plan["verdict"] == "nothing" else EXIT_FINDINGS
+    cmd = plan["run"]
+    print(
+        f"\nI can run `{' '.join(cmd)}` for you now in this terminal ({repo}). It creates or updates Azure resources "
+        "(cost) and can take 5-20 minutes; azd may ask questions."
+    )
+    sys.stdout.write(f"Type 'yes' to run `{' '.join(cmd)}` now, anything else to skip: ")
+    sys.stdout.flush()
+    if sys.stdin.readline().strip().lower() not in ("yes", "y"):
+        print("Skipped. Nothing was run.")
+        return EXIT_FINDINGS
+    try:
+        code, _ = runcmd.run_command(cmd, repo, False, runcmd.last_log_path())
+    except CommandNotAllowed as e:
+        print(f"Not run: {e}", file=sys.stderr)
+        return EXIT_ERROR
+    print(f"\n{'✔' if code == 0 else '✖'} `{' '.join(cmd)}` finished (exit {code}). Checking again...\n")
+    pasted = ""
+    if code != 0:
+        pasted = condense_log(
+            read_multiline("Paste the error text from above so it is analysed (optional; press Enter twice to skip):")
+        )
+    again = _diagnose(ts, args, "deployment stopped halfway, can it be resumed. " + pasted, full=True)
+    from .resume import build_resume_plan, render_resume
+
+    after = build_resume_plan(again.to_dict(), repo, pasted)
+    print(render_resume(after, plain=args.plain))
+    return EXIT_OK if after["verdict"] == "nothing" else EXIT_FINDINGS
 
 
 def cmd_cleanup(args) -> int:
@@ -1166,8 +1252,11 @@ def build_parser() -> argparse.ArgumentParser:
     dr.add_argument("--no-save", action="store_true", help="Do not write the local document-gaps file")
     dr.set_defaults(func=cmd_drift)
 
-    rs = sub.add_parser("resume", help="Can a halted deployment be resumed from where it stopped? (read-only)")
-    common(rs)
+    rs = sub.add_parser(
+        "resume",
+        help="Halted deployment: full health check + your pasted error -> where it stopped, is a re-run safe",
+    )
+    common(rs, issue_positional=True)
     rs.set_defaults(func=cmd_resume)
 
     cl = sub.add_parser("cleanup", help="Guided cleanup (azd down): what is deleted, what blocks it, the commands")

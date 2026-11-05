@@ -337,14 +337,30 @@ def test_missing_rg_or_an_empty_group_has_nothing_to_resume(tmp_path):
     assert plan["verdict"] == "nothing" and "azd up" in plan["next"][0]
 
 
+AZD_OK = {
+    "status": "pass",
+    "summary": "azd provision 'dev-1' Succeeded.",
+    "evidence": {
+        "recent_deployments": [{"name": "dev-1", "state": "Succeeded"}],
+        "azd_deployment": {
+            "name": "dev-1",
+            "state": "Succeeded",
+            "timestamp": "2026-11-05T10:00:00Z",
+            "azd_env": "dev",
+        },
+    },
+}
+
+
 def test_unfinished_post_provision_is_safe_to_resume_with_the_documented_hook(tmp_path):
     web = {
         "status": "fail",
         "summary": "x",
         "evidence": {"apps": [], "post_provision_missing": {"api": ["FOUNDRY_CHAT_AGENT"]}},
     }
-    plan = _plan(tmp_path, **{"webapp.state": web})
+    plan = _plan(tmp_path, **{"webapp.state": web, "deploy.operations": AZD_OK})
     assert plan["verdict"] == "resume-last" and "azd hooks run postprovision" in " ".join(plan["next"])
+    assert plan["run"] == ["azd", "hooks", "run", "postprovision"]
 
 
 def test_a_paused_fabric_capacity_comes_first(tmp_path):
@@ -353,16 +369,68 @@ def test_a_paused_fabric_capacity_comes_first(tmp_path):
         "summary": "paused",
         "evidence": {"capacities": [{"name": "fc", "resource_group": "rg-x", "state": "Paused"}]},
     }
-    plan = _plan(tmp_path, **{"azure.fabric": fab})
+    plan = _plan(tmp_path, **{"azure.fabric": fab, "deploy.operations": AZD_OK})
     assert plan["verdict"] == "fix-first" and "az fabric capacity resume" in plan["next"][0]
 
 
 def test_an_unverifiable_post_provision_step_is_never_claimed_finished(tmp_path):
-    plan = _plan(tmp_path)  # no app-level checks for this accelerator
+    plan = _plan(tmp_path, **{"deploy.operations": AZD_OK})  # no app-level checks for this accelerator
     assert "cannot be verified" in " ".join(plan["why"]) and "finished" not in " ".join(plan["why"])
     assert "NOTHING HALTED" in plan["label"] and any("azd hooks run postprovision" in n for n in plan["next"])
     text = render_resume(plan)
-    assert "Nothing was run" in text and "install_acme.py" in text
+    assert "Nothing has been run" in text and "install_acme.py" in text
+
+
+def test_resources_without_a_successful_azd_provision_are_not_called_deployed(tmp_path):
+    """The bug that was reported: resources existed, azd had not finished, and resume said infrastructure was done."""
+    plan = _plan(tmp_path)  # 3 resources, no failed operation, but no azd provision deployment recorded
+    infra = plan["steps"][1]
+    assert infra["state"] == "failed" and "no successful azd provision is recorded" in infra["detail"]
+    assert plan["verdict"] == "resume-infra" and plan["run"] == ["azd", "provision"]
+    stopped = {**AZD_OK, "evidence": {**AZD_OK["evidence"], "azd_deployment": {"name": "dev-2", "state": "Canceled"}}}
+    plan = build_resume_plan(_diag({"rg.state": OK_RG, "resources.state": OK_RES, "deploy.operations": stopped}), None)
+    assert plan["steps"][1]["state"] == "failed" and "Canceled" in plan["steps"][1]["detail"]
+    assert plan["steps"][2]["state"] == "pending" and "not reached yet" in plan["steps"][2]["detail"]
+
+
+def test_infrastructure_counts_as_done_only_when_azds_provision_succeeded(tmp_path):
+    plan = _plan(tmp_path, **{"deploy.operations": AZD_OK})
+    assert plan["steps"][1]["state"] == "done" and "Succeeded" in plan["steps"][1]["detail"]
+
+
+def test_a_pasted_post_provision_error_marks_that_step_failed(tmp_path):
+    d = _diag({"rg.state": OK_RG, "resources.state": OK_RES, "deploy.operations": AZD_OK})
+    err = "ERROR: error executing step command 'provision': failed running post hooks: 'postprovision' hook failed"
+    plan = build_resume_plan(d, _accelerator(tmp_path), err)
+    assert plan["steps"][2]["state"] == "failed" and "error you pasted" in plan["steps"][2]["detail"]
+    assert plan["verdict"] == "resume-last" and plan["pasted_error"]
+
+
+def test_a_pasted_error_from_an_earlier_run_is_called_out(tmp_path):
+    d = _diag({"rg.state": OK_RG, "resources.state": OK_RES, "deploy.operations": AZD_OK})
+    d["issue"] = {"error_codes": ["InsufficientQuota"]}
+    plan = build_resume_plan(d, _accelerator(tmp_path), "InsufficientQuota: not enough quota")
+    assert any("came from an earlier run" in n for n in plan["notes"])
+
+
+def test_other_health_findings_are_shown_with_their_fixes(tmp_path):
+    hyp = {
+        "id": "app-stopped",
+        "title": "App Service is stopped: api",
+        "status": "confirmed",
+        "remediation_ids": ["start-webapp"],
+    }
+    act = {
+        "start-webapp": {
+            "id": "start-webapp",
+            "title": "Start api",
+            "category": "approval_required",
+            "commands": ["az webapp start"],
+        }
+    }
+    d = _diag({"rg.state": OK_RG, "resources.state": OK_RES, "deploy.operations": AZD_OK}, [hyp], act)
+    plan = build_resume_plan(d, _accelerator(tmp_path))
+    assert "App Service is stopped: api" in plan["also_found"] and plan["fixes"][0]["id"] == "start-webapp"
 
 
 def test_resume_and_cleanup_modules_cannot_run_anything():
@@ -531,7 +599,7 @@ def test_the_new_skills_only_show_commands_and_the_agent_forbids_running_destruc
     cleanup = (skills / "cleanup-resources" / "SKILL.md").read_text(encoding="utf-8")
     assert "Never run `azd down`" in cleanup and "`cleanup_plan`" in cleanup and "`delete_resource_group`" in cleanup
     resume = (skills / "resume-deployment" / "SKILL.md").read_text(encoding="utf-8")
-    assert "Never run `azd`" in resume and "`resume_plan`" in resume
+    assert "You do not run `azd`" in resume and "`resume_plan`" in resume and "Ask for the error first" in resume
     agent = (REPO_ROOT / ".github" / "agents" / "accelerator-troubleshooter.agent.md").read_text(encoding="utf-8")
     assert "Never run `azd down`" in agent and "document-gaps.md" in agent
     for t in ("**[Repo docs]**", "**[Live Azure]**"):

@@ -90,11 +90,17 @@ def identify_accelerator(issue: str, accelerator: Optional[str] = None) -> str:
 
 
 @mcp.tool()
-def resume_plan(resource_group: Optional[str] = None, accelerator: Optional[str] = None) -> str:
-    """Read-only assessment of a deployment that stopped halfway: where it stopped (resource group, infrastructure,
-    post-provision step, Fabric capacity), why, and whether re-running is safe (NOTHING TO RESUME, WAIT, FIX FIRST,
-    SAFE TO RESUME) with the exact command. Runs nothing. Use for 'can I resume my deployment?'."""
-    return _cli(["resume", *_common(accelerator, resource_group, None)])
+def resume_plan(
+    resource_group: Optional[str] = None, error: Optional[str] = None, accelerator: Optional[str] = None
+) -> str:
+    """A deployment stopped halfway: runs a FULL health check (plus analysis of the azd error, if the user pasted one in
+    'error') and decides where it stopped and whether re-running is safe: NOTHING TO RESUME, WAIT, FIX FIRST, SAFE TO
+    RESUME (azd provision) or SAFE TO RESUME THE LAST STEP (post-provision hook). Infrastructure counts as done only
+    when azd's own provision deployment succeeded. Changes nothing. Ask the user for the error first if they have it."""
+    args = ["resume"]
+    if error:
+        args.append(error)
+    return _cli(args + _common(accelerator, resource_group, None))
 
 
 @mcp.tool()

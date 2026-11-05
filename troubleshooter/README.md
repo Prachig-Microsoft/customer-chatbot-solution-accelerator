@@ -379,13 +379,19 @@ workspace and item checks (REST API) are not built yet.
 
 ### Resume a halted deployment (`resume`, chat tool `resume_plan`)
 Azure cannot continue a half-finished ARM deployment, but `azd provision` re-applies the template and only creates
-what is missing, so a re-run is usually safe once the cause of the stop is gone. `resume` reads the deployment
-history, resource states, the post-provision state and the Fabric capacity and says: **NOTHING TO RESUME**, **WAIT**
-(a deployment is still running; stuck for over an hour gets a cancel command), **FIX FIRST** (a repeatable cause such
-as quota, region, policy or a resource in a Failed state: re-running would stop at the same place), **SAFE TO RESUME**
-(`azd provision`) or **SAFE TO RESUME THE LAST STEP** (infrastructure is complete, the post-provision step is not:
-`azd hooks run postprovision` when `azure.yaml` defines it). Where the post-provision step cannot be verified it says
-so and never claims it finished. It runs nothing.
+what is missing, so a re-run is usually safe once the cause of the stop is gone. `resume` first asks for the error azd
+showed (optional; or pass it: `resume "<error>"`, `--log FILE`, `--last`, `--from-clipboard`), then runs the **full
+health check** (every read-only check: deployments, resources, quota, apps, settings, RBAC, network, Fabric, app logs)
+and analyses the error together with it. The infrastructure only counts as done when **azd's own provision deployment**
+(the ARM deployment azd tags with `azd-env-name`) succeeded; resources that exist without it mean azd did not finish.
+Verdicts: **NOTHING TO RESUME**, **WAIT** (a deployment is still running; stuck for over an hour gets a cancel command),
+**FIX FIRST** (a repeatable cause such as quota, region, policy, a documented error code, a paused Fabric capacity or a
+resource in a Failed state: re-running would stop at the same place), **SAFE TO RESUME** (`azd provision`) or **SAFE TO
+RESUME THE LAST STEP** (infrastructure complete, post-provision not: `azd hooks run postprovision` when `azure.yaml`
+defines it). A pasted error from an earlier run that the current state no longer shows is called out as such; other
+health-check findings are listed under "Also found". Where the post-provision step cannot be verified it says so and
+asks for its error instead of claiming it finished. In a terminal it then offers to **do the next step** after you type
+`yes`: apply an allow-listed fix (then re-check), or run the resume command itself and check again.
 
 ### Guided cleanup (`cleanup`, chat tool `cleanup_plan`)
 Read-only and advisory: nothing is deleted by the tool or the agent. It lists what a cleanup would delete (resources by
