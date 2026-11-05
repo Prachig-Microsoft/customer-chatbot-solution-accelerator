@@ -22,10 +22,11 @@ these bullets, in this order:
 - **Needed values:** where each "needed" number came from, as links with file and line (the Bicep default, the
   parameters file, or the azd environment value), plus one short sentence that tells whether switching regions would
   change the quota (it does not for subscription-wide pools).
-- **Tools and versions:** one short line from the report's "Tools (as the docs ask)": each tool with the installed version
-  and the minimum the documents ask for, ✅ or ⚠️; name any missing tool or Azure CLI extension and which document asks
-  for it (a tool the docs mark optional, such as Docker for the Dev Container route, is not a blocker). Mention "also
-  installed" tools only briefly. Leave the bullet out when the report has no tools line.
+- **Tools and versions:** always include this bullet when the report has a "Tools (as the docs ask)" table: each tool
+  with the installed version and the minimum the documents ask for, ✅ or ⚠️ (for example "⚠️ Python 3.11.9, docs ask
+  >= 3.12"), and name any missing tool or Azure CLI extension and which document asks for it (a tool the docs mark
+  optional, such as Docker for the Dev Container route, is not a blocker). Mention "also installed" tools only briefly.
+  Do not fold tool problems into Warnings; they belong here.
 - **Blockers:** none, or the blockers with the smallest fix. **Warnings:** one sentence on what the tool warned about
   (for example missing azd values, documents that disagree with the template, uncommitted changes).
 - **Security reminder:** only when the tool shows the `SecurityControl` policy tag, one sentence on what it is.

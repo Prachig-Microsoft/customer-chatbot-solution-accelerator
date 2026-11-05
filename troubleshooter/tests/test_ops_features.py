@@ -621,3 +621,17 @@ def test_cleanup_for_a_group_that_is_already_gone_only_checks_for_leftovers(tmp_
     assert "nothing to clean up" in plan["warnings"][0]
     assert not any("azd down" in c or "az group delete" in c for c in cmds)
     assert "az cognitiveservices account list-deleted" in cmds
+
+
+def test_the_full_preflight_report_that_chat_reads_has_the_tools_table(tmp_path, capsys, monkeypatch):
+    import accel_troubleshooter.cli as cli
+
+    repo = _accelerator(tmp_path)
+    fx = _tools_fixture(azd="1.34.0", az="2.88.0", python="3.10.0", pwsh="7.6.0", git="2.55.0")
+    monkeypatch.setattr(cli, "_runner", lambda args: ReplayRunner(fx))
+    main(["--workspace", str(repo), "preflight", "--format", "full", "--no-prompt", "--env-file", "none"])
+    out = capsys.readouterr().out
+    assert "## Tools (as the docs ask)" in out
+    assert "| Python | 3.10.0 | >= 3.11 | ⚠️ older |" in out
+    assert "| Azure Developer CLI (azd) | 1.34.0 | >= 1.23.11 (required by azd) | ✅ |" in out
+    assert "az extension `microsoft-fabric`" in out and "Also installed (not asked for by the docs): git 2.55.0" in out

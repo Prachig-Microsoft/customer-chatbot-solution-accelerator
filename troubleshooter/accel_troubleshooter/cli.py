@@ -240,6 +240,43 @@ def cmd_diagnose(args) -> int:
     return _finish(ts, diag)
 
 
+def _tools_md(diag) -> str:
+    """The tools table for the full preflight report (chat reads this one, not the terminal summary)."""
+    tc = next((c for c in diag.checks if c.check_id == "repo.tools"), None)
+    if not tc or tc.status == "skip":
+        return ""
+    ev = tc.evidence or {}
+    mark = {"ok": "✅", "old": "⚠️ older", "missing": "⚠️ not installed", "unknown": "❔ not read"}
+    lines = [
+        "## Tools (as the docs ask)",
+        "",
+        "| Tool | Installed | Docs ask for | Status | Where the docs say so |",
+        "|---|---|---|---|---|",
+    ]
+    for r in ev.get("tools", []):
+        need = (
+            r["required"]
+            + (" (optional)" if r.get("optional") else "")
+            + (" (required by azd)" if r.get("hard") else "")
+        )
+        src = ", ".join(r.get("sources", [])[:2])
+        lines.append(
+            f"| {r['name']} | {r['installed'] or '-'} | {need} | {mark.get(r['status'], r['status'])} | {src} |"
+        )
+    for e in ev.get("extensions", []):
+        lines.append(
+            f"| az extension `{e['name']}` | {e.get('installed') or '-'} | installed | "
+            f"{'✅' if e['ok'] else '⚠️ not installed'} | {', '.join(e.get('sources', [])[:1])} |"
+        )
+    extra = ev.get("other_tools") or {}
+    if extra:
+        lines += [
+            "",
+            "Also installed (not asked for by the docs): " + ", ".join(f"{k} {v}" for k, v in sorted(extra.items())),
+        ]
+    return "\n".join(lines)
+
+
 def _quota_md(diag) -> str:
     qc = next((c for c in diag.checks if c.check_id == "quota.models"), None)
     if not qc or not qc.evidence.get("regions"):
@@ -323,7 +360,7 @@ def cmd_preflight(args) -> int:
     checked = quota is not None and quota.status in ("pass", "fail", "warn", "info")
     label = "🛑 NO-GO" if blocking else ("✅ GO" if checked else "❔ NOT CHECKED")
     verdict = "## Preflight verdict: " + label + "\n" + "\n".join(f"- `{c.check_id}`: {c.summary}" for c in blocking)
-    _emit(args, diag.to_dict(), "preflight", extra_md=verdict + "\n\n" + _quota_md(diag))
+    _emit(args, diag.to_dict(), "preflight", extra_md=verdict + "\n\n" + _quota_md(diag) + "\n\n" + _tools_md(diag))
     _finish(ts, diag)
     if blocking:
         return EXIT_FINDINGS
