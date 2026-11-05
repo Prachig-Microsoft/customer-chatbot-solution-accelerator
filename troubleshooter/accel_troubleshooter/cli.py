@@ -830,7 +830,71 @@ def cmd_cleanup(args) -> int:
     plan = build_cleanup_plan(diag.to_dict(), repo)
     print(json.dumps(plan, indent=2) if args.format == "json" else render_cleanup(plan, plain=args.plain))
     _finish(ts, diag)
-    return EXIT_OK
+    if not getattr(args, "delete", False):
+        return EXIT_OK
+    return _delete_flow(ts, args, diag, plan, repo)
+
+
+def _delete_flow(ts: Troubleshooter, args, diag, plan: Dict[str, Any], repo) -> int:
+    """Delete exactly one resource group after two typed confirmations and a fresh re-check of the group."""
+    from . import delete_rg
+    from .resume import script_of
+
+    t = diag.targets
+    rg = (args.resource_group or t.get("resource_group") or "").strip()
+    if ts.runner.mode != "live":
+        print("\nDeleting needs live Azure access (not --offline or --replay).", file=sys.stderr)
+        return EXIT_ERROR
+    if not rg:
+        print("\nNo resource group to delete: pass --resource-group <name>.", file=sys.stderr)
+        return EXIT_CLARIFY
+    ctx = {
+        "azd_env": t.get("azd_env") or "",
+        "env_rg": t.get("env_resource_group") or "",
+        "env_subscription": t.get("env_subscription") or "",
+        "predown": script_of(plan["predown"]) if plan.get("predown") else "",
+    }
+    snap = delete_rg.snapshot(ts.runner, rg)
+    verdict = delete_rg.assess(snap, **ctx)
+    print(delete_rg.render_checks(snap, verdict, plain=args.plain))
+    if verdict["blockers"]:
+        return EXIT_FINDINGS
+    name, phrase, fp = args.confirm_name, args.confirm, args.fingerprint
+    if name is None or phrase is None:
+        if not sys.stdin.isatty() or getattr(args, "no_prompt", False):
+            print(
+                "\nTo delete, the person who owns this resource group must confirm twice:\n"
+                f"  1. type the exact name:      {rg}\n"
+                f"  2. then type exactly:        {delete_rg.phrase_for(rg)}\n"
+                f"  and the plan fingerprint is: {verdict['fingerprint']}"
+            )
+            return EXIT_FINDINGS
+        print(
+            f"\n⚠  This permanently deletes the resource group '{rg}' and all {len(snap.get('resources', []))} "
+            f"resource(s) in it, in subscription {snap.get('subscription_name')}. It cannot be undone."
+        )
+        sys.stderr.write("\n1/2  Type the exact name of the resource group to delete: ")
+        sys.stderr.flush()
+        name = sys.stdin.readline().rstrip("\r\n")
+        if name != rg:
+            print(f"Not deleted: '{name}' is not exactly '{rg}'.")
+            return EXIT_OK
+        sys.stderr.write(f"2/2  Last check. Type '{delete_rg.phrase_for(rg)}' to delete it now: ")
+        sys.stderr.flush()
+        phrase = sys.stdin.readline().rstrip("\r\n")
+        fp = verdict["fingerprint"]
+    elif fp is None:
+        print("\nNot deleted: --fingerprint (from the cleanup plan you reviewed) is required.", file=sys.stderr)
+        return EXIT_ERROR
+
+    def progress(msg: str) -> None:
+        print(msg, flush=True)
+
+    res = delete_rg.delete_resource_group(
+        ts.runner, rg, name, phrase, fp, repo or ts.workspace, progress=progress, **ctx
+    )
+    print("\n" + delete_rg.render_result(res, plain=args.plain))
+    return EXIT_OK if res.get("deleted") else EXIT_FINDINGS
 
 
 def cmd_about(args) -> int:
@@ -1108,6 +1172,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     cl = sub.add_parser("cleanup", help="Guided cleanup (azd down): what is deleted, what blocks it, the commands")
     common(cl)
+    cl.add_argument(
+        "--delete",
+        action="store_true",
+        help="Delete this one resource group after you type its exact name and then confirm again",
+    )
+    cl.add_argument("--confirm-name", help="(non-interactive) the exact resource group name, typed by its owner")
+    cl.add_argument("--confirm", help="(non-interactive) the second confirmation: 'delete <resource-group>'")
+    cl.add_argument("--fingerprint", help="(non-interactive) fingerprint of the plan that was reviewed")
     cl.set_defaults(func=cmd_cleanup)
 
     ct = sub.add_parser(

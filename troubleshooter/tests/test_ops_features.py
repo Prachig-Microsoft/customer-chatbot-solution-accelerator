@@ -529,11 +529,11 @@ def test_drift_saves_the_gaps_file_locally_and_keeps_json_output_valid(capsys, t
 def test_the_new_skills_only_show_commands_and_the_agent_forbids_running_destructive_ones():
     skills = REPO_ROOT / ".github" / "skills"
     cleanup = (skills / "cleanup-resources" / "SKILL.md").read_text(encoding="utf-8")
-    assert "Never run `azd down`" in cleanup and "only **show** commands" in cleanup and "`cleanup_plan`" in cleanup
+    assert "Never run `azd down`" in cleanup and "`cleanup_plan`" in cleanup and "`delete_resource_group`" in cleanup
     resume = (skills / "resume-deployment" / "SKILL.md").read_text(encoding="utf-8")
     assert "Never run `azd`" in resume and "`resume_plan`" in resume
     agent = (REPO_ROOT / ".github" / "agents" / "accelerator-troubleshooter.agent.md").read_text(encoding="utf-8")
-    assert "never run `azd down`" in agent and "document-gaps.md" in agent
+    assert "Never run `azd down`" in agent and "document-gaps.md" in agent
     for t in ("**[Repo docs]**", "**[Live Azure]**"):
         assert t in cleanup and t in resume
 

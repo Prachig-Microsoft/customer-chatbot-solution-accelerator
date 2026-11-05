@@ -9,7 +9,9 @@ after the troubleshooter is updated.
 Remediation: read-only tools never change anything. Two tools act on the user's behalf and both refuse unless the caller
 passes ``user_approved=true`` (the agent instructions allow that only after the user said yes): ``apply_fix`` (runs one
 allow-listed fix, then verifies and re-checks health) and ``chat_test`` (sends one real chat message and deletes the
-test session). ``draft_guide_entry`` only prints a draft; it never edits the guide.
+test session). ``draft_guide_entry`` only prints a draft; it never edits the guide. ``delete_resource_group`` is the
+only destructive tool: it deletes one resource group, and only when called with the exact name and the phrase
+``delete <name>`` that the user typed, plus the fingerprint of the plan they saw; the group is re-checked first.
 """
 
 from __future__ import annotations
@@ -101,6 +103,29 @@ def cleanup_plan(resource_group: Optional[str] = None, accelerator: Optional[str
     that need a purge, what the accelerator's own hooks and docs say, and the exact commands for the user to run.
     Deletes nothing and never will: show the commands, never run them."""
     return _cli(["cleanup", *_common(accelerator, resource_group, None)])
+
+
+@mcp.tool()
+def delete_resource_group(
+    resource_group: str,
+    confirm_name: Optional[str] = None,
+    confirm_phrase: Optional[str] = None,
+    fingerprint: Optional[str] = None,
+    accelerator: Optional[str] = None,
+) -> str:
+    """DESTRUCTIVE: deletes exactly one resource group and everything in it (az group delete). Two calls:
+    (1) call with only resource_group: it re-checks the group in Azure (exists, subscription, locks, what is inside)
+    and returns the checks plus a plan fingerprint, deleting nothing; show that to the user.
+    (2) only after the user has TYPED the exact group name in one message and then, in a later message, typed
+    'delete <name>', call again with confirm_name and confirm_phrase set to exactly what the user typed and the
+    fingerprint from step 1. Never fill these in yourself, never reuse earlier text, never call step 2 in the same turn
+    as step 1. The group is read again before deleting; if anything changed, it refuses."""
+    args = ["cleanup", "--delete", *_common(accelerator, resource_group, None)]
+    if confirm_name is not None and confirm_phrase is not None:
+        args += ["--confirm-name", confirm_name, "--confirm", confirm_phrase]
+        if fingerprint:
+            args += ["--fingerprint", fingerprint]
+    return _cli(args, timeout=FIX_TIMEOUT)
 
 
 @mcp.tool()

@@ -296,6 +296,8 @@ class Troubleshooter:
             "ai_region": ctx.ai_region or None,
             "azd_env": env.name or None,
             "subscription": ctx.facts.get("subscription_id"),
+            "env_resource_group": env_rg or None,
+            "env_subscription": env.get(profile.get("azd_env_keys", {}).get("subscription")) or None,
         }
 
         # Retrieval: user text + reported/observed error codes + classified stages.

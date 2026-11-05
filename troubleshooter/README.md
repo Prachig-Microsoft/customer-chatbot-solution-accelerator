@@ -397,6 +397,23 @@ steps: Option A `azd down --purge --force` (which also runs the `predown` hook) 
 purge, with a note on what B skips. A Fabric capacity bills while Active even when idle: pausing it is the cheaper
 alternative when you want to keep the data.
 
+**Deleting the resource group for you (`cleanup --delete`, chat tool `delete_resource_group`).** The only destructive
+operation, kept out of the approved-fix path (`apply_fix` cannot reach it), and it deletes exactly one resource group:
+1. It reads the group again from Azure: it must exist, be in the signed-in subscription (and in the azd environment's
+   subscription when it is that environment's group) and have no locks; otherwise it stops. It warns when the group
+   belongs to another azd environment and when a plain group delete skips the accelerator's `predown` hook (for example
+   Microsoft IQ's Fabric clean-up: use `azd down` for that). It prints a fingerprint of what you were shown
+   (subscription, group and every resource id).
+2. You type the exact group name (case-sensitive). Then you type `delete <name>`. Anything else deletes nothing.
+3. Right before deleting it reads the group again; if anything was added or removed, or the subscription changed, the
+   fingerprint differs and it refuses.
+4. It runs one command, `az group delete --name <name> --yes --no-wait`, waits until Azure reports the group gone (up to
+   35 minutes, otherwise it says "still deleting"), lists soft-deleted AI accounts from that group with purge commands
+   for you to run (it never purges), and appends a record to `.runs/deletions.jsonl`.
+
+In a terminal: `python -m accel_troubleshooter cleanup --delete --resource-group <name>` (asks both questions). In chat
+the agent asks you to type the name, then the phrase, in two separate messages, and passes exactly what you typed.
+
 ### Draft a guide entry (`draft-guide`, chat tool `draft_guide_entry`)
 Turns a diagnosed incident into one row in the guide's own table format
 (`| **Error** | Description | <ul><li>steps</li></ul> |`), generalised (resource names, ids, emails, addresses and

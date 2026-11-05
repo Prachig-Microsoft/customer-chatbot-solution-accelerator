@@ -622,6 +622,7 @@ def test_skills_are_valid_slash_commands():
         "draft_guide_entry",
         "resume_plan",
         "cleanup_plan",
+        "delete_resource_group",
     }
     for folder, p in skills.items():
         text = p.read_text(encoding="utf-8")
