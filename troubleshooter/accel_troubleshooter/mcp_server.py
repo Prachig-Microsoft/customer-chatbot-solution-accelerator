@@ -291,10 +291,15 @@ def quota_check(
 
 
 @mcp.tool()
-def preflight(accelerator: Optional[str] = None, region: Optional[str] = None) -> str:
-    """Pre-deployment check (login, providers, quota in all allowed regions, model availability, config drift).
-    Returns a GO / NO-GO verdict with a recommended region."""
-    return _cli(["preflight", *_common(accelerator, None, region)])
+def preflight(accelerator: Optional[str] = None, region: Optional[str] = None, location: Optional[str] = None) -> str:
+    """Pre-deployment check (login, providers, model quota in all allowed AI regions, model availability, App Service
+    plan quota in the primary location, tools, config drift). Returns a GO / NO-GO verdict with a recommended AI region
+    (`region`, model quota) and, separately, a recommended primary location (`location`, App Service quota).
+    "GO (models only; App Service quota not checked)" is not a plain GO: report it as written."""
+    args = ["preflight", *_common(accelerator, None, region)]
+    if location:
+        args += ["--location", location]
+    return _cli(args)
 
 
 @mcp.tool()

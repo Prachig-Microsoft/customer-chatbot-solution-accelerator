@@ -345,6 +345,139 @@ def quota_insufficient(ctx):
     ]
 
 
+_SKU_OVER = re.compile(
+    r"Current Limit \((?P<sku>[\w]+) VMs\)\s*:\s*(?P<limit>\d+)\s*,\s*Current Usage\s*:\s*(?P<used>\d+)\s*,\s*"
+    r"Amount required \([\w]+ VMs\)\s*:\s*(?P<need>\d+)",
+    re.I,
+)
+_APP_SERVICE_CONTEXT = re.compile(r"serverfarms?|app ?service|\bVMs\)", re.I)
+
+
+def _compute_error(ctx) -> Dict[str, Any]:
+    """The App Service quota error from the pasted text or a failed ARM operation: {sku, limit, used, need, source}."""
+    texts = [("the error you pasted", ctx.issue.raw_text)]
+    texts += [
+        (f"failed ARM operation on {e.get('resource_type')}/{e.get('resource_name')}", e.get("message") or "")
+        for e in ctx.facts.get("deployment_errors", [])
+        if (e.get("code") or "").lower() == "internalsubscriptionisoverquotaforsku"
+    ]
+    for source, text in texts:
+        m = _SKU_OVER.search(text or "")
+        if m:
+            return {**{k: m.group(k) for k in ("sku", "limit", "used", "need")}, "source": source}
+    return {}
+
+
+@rule(10)
+def compute_quota_insufficient(ctx):
+    """App Service plan SKU quota in the primary location (InternalSubscriptionIsOverQuotaForSku on serverFarms)."""
+    reported, observed = _codes(ctx)
+    live = ctx.results.get("quota.compute")
+    live_fail = bool(live and live.status == FAIL)
+    code = "internalsubscriptionisoverquotaforsku"
+    err = _compute_error(ctx)
+    named = code in (reported | observed) or code in (ctx.issue.raw_text or "").lower()  # even if no guide lists it
+    texty = named and (err or _APP_SERVICE_CONTEXT.search(ctx.issue.raw_text or ""))
+    if not live_fail and not texty:
+        return []
+    ctx.facts["compute_quota_handled"] = True
+    table = ctx.facts.get("compute_table") or {}
+    target = ctx.facts.get("compute_target") or next((r for r in ctx.issue.regions if r in table), None)
+    if not target and ctx.issue.regions:
+        target = ctx.issue.regions[0]
+    cands = [r for r in ctx.facts.get("compute_candidates") or [] if r != target]
+    rationale: List[str] = []
+    if err:
+        rationale.append(
+            f"{err['source']}: InternalSubscriptionIsOverQuotaForSku, {err['sku']} limit {err['limit']}, "
+            f"in use {err['used']}, required {err['need']}"
+        )
+    if live_fail:
+        rationale.append(f"live App Service quota (Microsoft.Quota): {live.summary}")
+    plans = (ctx.facts.get("compute_requirements") or {}).get("plans")
+    if plans is None:
+        try:  # offline-capable: read the plans from the Bicep so the cause can cite the line
+            from .diagnostics.compute_checks import compute_requirements
+
+            plans = compute_requirements(ctx)["plans"]
+        except Exception:  # noqa: BLE001 - a missing template must never break the diagnosis
+            plans = []
+    plan = next(
+        (p for p in plans if not err or p.get("sku", "").lower() == err["sku"].lower()), plans[0] if plans else None
+    )
+    if plan:
+        rationale.append(
+            f"the template asks for {plan['sku']} x{plan['capacity']} at {plan['where']}, created in the primary "
+            f"location ({ctx.env_key('location') or 'AZURE_LOCATION'}), not the AI services region"
+        )
+    sku = (err or {}).get("sku") or (plan or {}).get("sku") or "the plan SKU"
+    rows = [r for r in (table.get(target or "", {}) or {}).get("rows", []) if r.get("ok") is False]
+    limit = (err or {}).get("limit") or (rows[0].get("limit") if rows else "?")
+    need = (err or {}).get("need") or (rows[0].get("need") if rows else "?")
+    missing: List[str] = []
+    if not live:
+        missing.append(
+            "live App Service quota per location (run preflight: it reads Microsoft.Quota for Microsoft.Web)"
+        )
+    if not target:
+        missing.append("which primary location was used (AZURE_LOCATION)")
+    docs = [_ts_ref(ctx, "InternalSubscriptionIsOverQuotaForSku")]
+    acts = []
+    if not cands:
+        acts.append(build_action("find-app-service-location", ctx.profile, sku=sku))
+    if cands:
+        acts.append(
+            build_action(
+                "set-primary-location",
+                ctx.profile,
+                region=cands[0],
+                env=ctx.env_key("location") or "AZURE_LOCATION",
+                needs=ctx.facts.get("compute_needs") or sku,
+                doc_refs=docs,
+            )
+        )
+    acts.append(
+        build_action(
+            "request-app-service-quota",
+            ctx.profile,
+            sku=sku,
+            region=target or "<location>",
+            need=need,
+            limit=limit,
+            doc_refs=docs,
+        )
+    )
+    if plan:
+        acts.append(
+            build_action(
+                "change-app-service-sku",
+                ctx.profile,
+                sku=plan["sku"],
+                where=plan["where"],
+                region=target or "<location>",
+            )
+        )
+    status, conf = (CONFIRMED, "high") if (live_fail or err) else (LIKELY, "medium")
+    where = f" in {target}" if target else ""
+    return [
+        (
+            Hypothesis(
+                "compute-quota-insufficient",
+                f"App Service plan quota: {sku} is not available{where} (limit {limit}, needs {need})",
+                status,
+                conf,
+                rationale + ([f"locations with {sku} quota (live): {', '.join(cands[:5])}"] if cands else []),
+                supporting_checks=["quota.compute"] if live else [],
+                missing_evidence=missing,
+                doc_refs=[d for d in docs if d],
+                source_refs=[plan["where"]] if plan else [],
+                component="App Service plan (primary location)",
+            ),
+            [a for a in acts if a],
+        )
+    ]
+
+
 @rule(11)
 def model_unsupported(ctx):
     reported, observed = _codes(ctx)
@@ -516,6 +649,8 @@ def _phrase_rows(ctx: DiagContext, skip: set):
 def documented_deployment_errors(ctx):
     reported, observed = _codes(ctx)
     handled = QUOTA_CODES | MODEL_CODES | {"resourcegroupnotfound", "deploymentfailed"}
+    if ctx.facts.get("compute_quota_handled"):
+        handled = handled | {"internalsubscriptionisoverquotaforsku"}  # answered specifically by the rule above
     out = []
     if ctx.index is None:
         return out
@@ -525,7 +660,12 @@ def documented_deployment_errors(ctx):
         if row is not None and all(row.ref != r[1].ref for r in rows):
             rows.append((code, row))
     seen = {r.ref for _, r in rows}
-    rows += [(p.title.lower(), p) for p in _phrase_rows(ctx, seen)]
+    compute = bool(ctx.facts.get("compute_quota_handled"))
+    rows += [
+        (p.title.lower(), p)
+        for p in _phrase_rows(ctx, seen)
+        if not (compute and "quota" in (p.title + " " + p.text[:300]).lower())  # the App Service answer replaces it
+    ]
     for code, row in rows:
         live = code in observed
         detail = next((e for e in ctx.facts.get("deployment_errors", []) if (e.get("code") or "").lower() == code), {})

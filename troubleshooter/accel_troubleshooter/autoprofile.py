@@ -126,6 +126,45 @@ def _uses_models(repo: Path, providers: List[str]) -> bool:
     return bool(re.search(r"\bgpt-|text-embedding|accounts/deployments|usageName", text))
 
 
+def _static_compute(
+    repo: Path, main: Optional[str], params, env_map, loc_param: str, ai_param: str
+) -> List[Dict[str, Any]]:
+    """App Service plans with the template's default values (default flavor), for review in the saved profile.
+
+    The live check re-reads the Bicep with the azd environment's values, so this is a record, not the source of truth.
+    """
+    if not main:
+        return []
+    from .bicepeval import find_app_service_plans
+
+    values = {}
+    for name, p in params.items():
+        entry = env_map.get(name) or {}
+        if entry.get("default"):
+            values[name] = (entry["default"], "main.parameters.json default")
+        elif entry.get("literal") not in (None, ""):
+            values[name] = (entry["literal"], "main.parameters.json value")
+        elif p.default is not None:
+            values[name] = (p.default, f"{main}:{p.line} default")
+    try:
+        found = find_app_service_plans(repo, main, values, tuple(x for x in (loc_param or "location", ai_param) if x))
+    except Exception:  # noqa: BLE001 - deriving a profile must never fail on an unusual template
+        return []
+    return [
+        {
+            "kind": "appservice",
+            "name": p["name"],
+            "sku": p["sku"],
+            "capacity": p["capacity"],
+            "zone_redundant": p["zone_redundant"],
+            "location_param": p["location_param"] or loc_param or "location",
+            "where": p["where"],
+        }
+        for p in found["plans"]
+        if p.get("sku")
+    ]
+
+
 def _tokens(model: str) -> List[str]:
     return [t for t in re.split(r"[^a-z0-9]+", model.lower()) if len(t) >= 3 and not t.isdigit()]
 
@@ -253,6 +292,9 @@ def derive_profile(repo: Path) -> Optional[Dict[str, Any]]:
         ],
         "iac": iac,
         "azd_env_keys": keys,
+        "compute_skus": _static_compute(
+            repo, main, params, env_map, iac.get("location_param", ""), iac.get("ai_location_param", "")
+        ),
         "apps": [],
         "diagnostics": "generic",
         "auto_derived": True,

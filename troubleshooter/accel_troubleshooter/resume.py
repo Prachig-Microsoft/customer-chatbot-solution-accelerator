@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional
 # Causes a plain re-run would hit again, so they must be fixed first.
 DETERMINISTIC_PREFIXES = (
     "quota-insufficient",
+    "compute-quota-insufficient",
     "model-region-unsupported",
     "parameter-not-allowed",
     "provider-unregistered",

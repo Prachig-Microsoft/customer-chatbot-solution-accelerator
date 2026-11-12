@@ -547,6 +547,7 @@ def quota_models(ctx: DiagContext) -> CheckResult:
     ref = [ctx.doc_ref(ctx.profile["iac"]["quota_doc"], "Check Quota|Quota"), ctx.ts_ref("InsufficientQuota")]
     ev = {
         "target_region": target or None,
+        "ai_location_env": ctx.env_key("ai_location"),
         "requirements": [_slim(r) for r in reqs],
         "regions": table,
         "regions_with_sufficient_quota": candidates,

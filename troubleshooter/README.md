@@ -361,6 +361,33 @@ git-ignored list of everything the documentation is missing or gets wrong: the d
 guide, guides with no recognisable entries, a README without a prerequisites section, documents the profile expects
 but the repository lacks, and broken links. `drift --no-save` skips the file.
 
+### App Service plan quota (preflight, `quota.compute`)
+Model quota is not the whole story: App Service plans are created in the **primary location** (`AZURE_LOCATION` /
+`location`), which is a separate setting from the AI services region, and a subscription can have `B3 VMs: 0` there
+(`azd up` then fails validation with `InternalSubscriptionIsOverQuotaForSku` on `Microsoft.Web/serverFarms`).
+`preflight` therefore:
+- reads every `Microsoft.Web/serverfarms` plan the template creates, following the entry template through its modules
+  for the selected flavor (`bicepeval.py`: params, vars, `if (...)` module conditions, `== != ! && ||` and `? :`;
+  functions are never guessed). Parameter values are resolved the azd way (what-if override, azd env, `config.json`,
+  `main.parameters.json`, Bicep default). Example for Multi-Agent Custom Automation Engine: `bicep` and `avm` give
+  **B3 x1** (`infra/bicep/main.bicep:795`, `infra/avm/main.bicep:1375`), `avm-waf` gives **P1v4 x3, zone redundant**.
+  An accelerator whose SKUs cannot be parsed can declare them in its profile: `"compute_skus": [{"kind": "appservice",
+  "sku": "B3", "capacity": 1, "location_param": "location"}]` (`init-profile` writes the parsed ones for review);
+- reads the subscription's App Service quota per location with two read-only GETs, verified on a real subscription to
+  report the same "B3 VMs" limits as the ARM error: `Microsoft.Web/locations/<loc>/providers/Microsoft.Quota/quotas` and
+  `/usages` (api-version 2023-02-01). Zone-redundant plans use the `<SKU>_AZ` quota; where a location lists no per-SKU
+  limit, the regional total is used and labelled so. It never reports PASS without a limit read from Azure;
+- reports **two** places: the AI region (model quota) and the primary location (App Service quota), and only
+  recommends a primary location where the check passed. Not enough quota in the chosen location is **NO-GO** with the
+  fixes, safest first: 🟡 `azd env set AZURE_LOCATION <location with quota>`, 🔴 request quota
+  (https://aka.ms/antquotahelp, needs someone with quota rights), 📘 change the SKU at the Bicep line named. When the
+  quota could not be read the verdict is **"GO (models only; App Service quota not checked)"**, never a plain GO;
+- recognises the error itself: pasting `InternalSubscriptionIsOverQuotaForSku ... Current Limit (B3 VMs): 0 ...` gives
+  a confirmed "App Service plan quota" cause with the numbers, the location ("East US 2" is `eastus2`) and the Bicep
+  line, instead of the generic VM-quota row.
+It runs only before deploying (`preflight`; `--location` evaluates another primary location): once deployed, the plan's
+own instances count as used, so it is not part of the health check.
+
 ### Tools and versions (preflight, `repo.tools`)
 `preflight` also compares what the documents ask for with what is installed on this machine (`azd`, `az`, `python`,
 `node`, `pwsh`, `docker`, `git`, `dotnet`, `terraform`, `kubectl`; fixed read-only `--version` calls, nothing else is

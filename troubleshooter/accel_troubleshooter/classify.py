@@ -124,8 +124,10 @@ def extract(text: str, known_error_codes: Iterable[str] = ()) -> IssueContext:
     ctx.http_statuses = _uniq(int(a or b) for a, b in _HTTP.findall(text))
     low = text.lower()
     regions = [r for r in AZURE_REGIONS if re.search(rf"\b{r}\b", low)]
-    regions += [
-        r for spaced, r in _REGION_SPACED.items() if re.search(r"\b" + spaced.replace(" ", r"\s*") + r"\b", low)
+    regions += [  # "East US 2" is eastus2, not eastus: a spaced name must not be followed by a number
+        r
+        for spaced, r in _REGION_SPACED.items()
+        if re.search(r"\b" + spaced.replace(" ", r"\s*") + r"\b" + (r"(?!\s*\d)" if not r[-1].isdigit() else ""), low)
     ]
     ctx.regions = _uniq(regions)
     names = _RESOURCE.findall(text) + _RG_PATH.findall(text) + _RG_PHRASE.findall(text)

@@ -34,6 +34,7 @@ EXECUTABLE_ACTIONS = frozenset(
     {
         "set-model-capacity",
         "set-ai-region",
+        "set-primary-location",
         "select-subscription",
         "register-provider",
         "build-push-images",
@@ -181,6 +182,55 @@ def build_action(action_id: str, profile: Dict[str, Any], **p: Any) -> Optional[
             "the agent does not resume capacities.",
             verify_checks=["azure.fabric"],
             params={**p, "manual": True},
+        )
+    if action_id == "find-app-service-location":
+        return Action(
+            action_id,
+            f"Find a primary location with App Service quota for {p['sku']}",
+            READ_ONLY,
+            "Preflight reads the App Service quota for the template's plan SKU in every allowed primary location "
+            "(Microsoft.Quota, read-only) and recommends one that fits.",
+            commands=["python -m accel_troubleshooter preflight"],
+            params=p,
+        )
+    if action_id == "set-primary-location":
+        return Action(
+            action_id,
+            f"Use primary location {p['region']}",
+            APPROVAL_REQUIRED,
+            f"Writes {p['env']}={p['region']} into the azd environment. App Service plans (and the other app and data "
+            f"resources) are created there; {p['region']} has App Service quota for {p['needs']} (read live).",
+            commands=[f"azd env set {p['env']} {p['region']}"],
+            risk="Only valid before the resources exist: an existing deployment cannot move region (use a new azd "
+            "environment instead). The AI services region is a separate setting and is not changed.",
+            prerequisites=["No resources deployed yet in this azd environment, or a new azd env"],
+            verify_checks=["quota.compute"],
+            params=p,
+            doc_refs=p.get("doc_refs", []),
+        )
+    if action_id == "request-app-service-quota":
+        return Action(
+            action_id,
+            f"Request App Service quota for {p['sku']} in {p['region']}",
+            RESTRICTED,
+            f"Ask for {p['sku']} instances in {p['region']} (needs {p['need']}, limit {p['limit']}). Use the App "
+            "Service quota request (https://aka.ms/antquotahelp) or an Azure support request (Service and subscription "
+            "limits).",
+            risk="Needs someone with quota rights to approve; can take days. Not automatable.",
+            params=p,
+            doc_refs=p.get("doc_refs", []),
+        )
+    if action_id == "change-app-service-sku":
+        return Action(
+            action_id,
+            f"Change the App Service plan SKU in the template ({p['where']})",
+            MANUAL,
+            f"The template asks for {p['sku']} at {p['where']}. A SKU with quota in {p['region']} (see the preflight "
+            "table) avoids the limit. This is a template change: review cost, performance and the accelerator's "
+            "@allowed list before committing it.",
+            commands=[f"edit {p['where']}: skuName '{p['sku']}' -> a SKU with quota in {p['region']}"],
+            risk="Changes cost and performance for every deployment of this template.",
+            params=p,
         )
     if action_id == "azd-provision":
         return Action(

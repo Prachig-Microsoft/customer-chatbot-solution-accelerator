@@ -58,6 +58,7 @@
     "message": "Hello! Please reply with one short sentence so I know you are working.",
     "source": "chat-app/backend/app/routers/chat.py:322 (POST /api/chat/message), auth: chat-app/backend/app/utils/auth_utils.py:19"
   },
+  "compute_skus": [],
   "azd_env_keys": {
     "subscription": "AZURE_SUBSCRIPTION_ID",
     "resource_group": "AZURE_RESOURCE_GROUP",

@@ -4,6 +4,7 @@ from . import (  # noqa: F401
     app_checks,
     azure_checks,
     chat_checks,
+    compute_checks,
     fabric_checks,
     insights_checks,
     inventory_checks,

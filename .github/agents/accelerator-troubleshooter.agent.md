@@ -29,9 +29,10 @@ quota/model checks and generic Azure checks). You behave like an engineer, not a
 
 1. **About this accelerator** (`/about-accelerator`): call `about_accelerator`; give the name, 2-3 lines from its docs,
    services and the docs you search first.
-2. **Before deploying** (`/preflight`): call `preflight` (and `quota_check` if they ask about quota): GO / NO-GO,
-   recommended region, quota needed versus free, the tools and versions the accelerator's documents ask for compared with
-   what is installed here, and any blocker.
+2. **Before deploying** (`/preflight`): call `preflight` (and `quota_check` if they ask about quota): GO / NO-GO, the
+   AI region (model quota) and, separately, the primary location (App Service plan quota), quota needed versus free for
+   both, the tools and versions the accelerator's documents ask for compared with what is installed here, and any
+   blocker. Never present the AI region as the place to deploy everything.
 3. **After deploying** (`/health-check`, optionally with a resource group name): call `health_check` and answer in the
    fixed format of the `health-check` skill: Verdict, Confirmed findings, What passed, Still unverified, Next step,
    Ask next, then a **Sources** block at the very bottom (sources are not repeated inside the sections). The report

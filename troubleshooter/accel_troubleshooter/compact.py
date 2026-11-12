@@ -39,6 +39,7 @@ SHORT = {
     "resources.state": "resources",
     "activity.failures": "activity log (72h)",
     "quota.models": "model quota",
+    "quota.compute": "App Service quota",
     "models.availability": "model availability",
     "ai.deployments": "AI model deployments",
     "network.public_access": "network access",
@@ -213,11 +214,79 @@ def _recommend_region(d: Dict[str, Any]) -> Dict[str, Any]:
         else:
             region, why = chosen, "short on quota here and in every allowed region (Global quota is shared)"
     elif ranked:
-        region, why = ranked[0], "best free quota" + (", also a valid primary location" if ranked[0] in locs else "")
+        region, why = ranked[0], "best free model quota"
     else:
         region, why = None, "no allowed region has enough quota"
     others = [r for r in ranked if r != region]
-    return {"region": region, "why": why, "others": others, "chosen": chosen, "locations": locs, "env": env_ev}
+    return {
+        "region": region,
+        "why": why,
+        "others": others,
+        "chosen": chosen,
+        "locations": locs,
+        "env": env_ev,
+        "ai_env": qev.get("ai_location_env") or "AZURE_ENV_AI_SERVICE_LOCATION",
+    }
+
+
+def _plans_label(ev: Dict[str, Any]) -> str:
+    seen: Dict[str, int] = {}
+    for p in ev.get("plans") or []:
+        if p.get("sku") and p.get("location_role") in ("primary", "assumed-primary"):
+            key = p["sku"] + (" zone-redundant" if p.get("zone_redundant") else "")
+            seen[key] = seen.get(key, 0) + int(p.get("capacity") or 1)
+    return ", ".join(f"{k} x{n}" for k, n in seen.items()) or "App Service plan"
+
+
+def recommend_primary(d: Dict[str, Any]) -> Dict[str, Any]:
+    """The primary location (apps, data, App Service plans): only one where the App Service quota check passed."""
+    cc = _check(d, "quota.compute")
+    if cc is None:
+        return {"state": "absent"}
+    ev = cc.get("evidence") or {}
+    if ev.get("not_applicable"):
+        return {"state": "n/a"}
+    target, table = ev.get("target_location"), ev.get("regions") or {}
+    cands = ev.get("regions_with_quota") or []
+    out = {
+        "needs": _plans_label(ev),
+        "env": ev.get("location_env") or "AZURE_LOCATION",
+        "target": target,
+        "table": table,
+        "cands": cands,
+        "summary": cc["summary"],
+        "where": [p.get("where") for p in ev.get("plans", [])],
+    }
+    if cc["status"] == "skip":
+        return {**out, "state": "unchecked", "location": None, "why": cc["summary"]}
+    if target and (table.get(target) or {}).get("status") == "ok":
+        return {**out, "state": "ok", "location": target, "why": "your azd env choice; App Service quota OK"}
+    if target and (table.get(target) or {}).get("status") == "short":
+        alt = next((r for r in cands if r != target), None)
+        why = f"{target} (your choice) has no App Service quota for {out['needs']}"
+        return {**out, "state": "short", "location": alt, "why": why + (f"; {alt} has it" if alt else "")}
+    if cands:
+        return {**out, "state": "ok", "location": cands[0], "why": "most free App Service quota"}
+    return {**out, "state": "short", "location": None, "why": cc["summary"]}
+
+
+def _compute_line(prim: Dict[str, Any], plain: bool) -> Optional[str]:
+    table = prim.get("table") or {}
+    if not table:
+        return None
+    ok_i, bad_i = ("OK", "!!") if plain else ("✅", "❌")
+    order = [r for r in [prim.get("target"), prim.get("location")] if r] + [r for r in prim.get("cands", [])]
+    order += [r for r in table if table[r].get("status") == "short"]
+    parts = []
+    for r in list(dict.fromkeys(order))[:5]:
+        rows = table[r].get("rows") or []
+        if table[r].get("status") == "unknown" or not rows:
+            parts.append(f"{r} not reported")
+            continue
+        row = rows[0]
+        mark = ok_i if row.get("ok") else bad_i
+        parts.append(f"{r} limit {row.get('limit')}, free {row.get('free')} {mark}")
+    return f"  ▸ Compute quota (App Service, live): {prim['needs']} · " + " · ".join(parts)
 
 
 def render_preflight(d: Dict[str, Any], plain: bool = False) -> str:
@@ -240,6 +309,9 @@ def render_preflight(d: Dict[str, Any], plain: bool = False) -> str:
         ]
         return _finish("\n".join(out), plain)
     verdict = ("NO-GO" if plain else "🛑 NO-GO") if blocking else ("GO" if plain else "✅ GO")
+    prim = recommend_primary(d)
+    if not blocking and prim["state"] == "unchecked":
+        verdict += " (models only; App Service quota not checked)"
     out = [f"PREFLIGHT: {verdict} · {a.get('id', '?')} · subscription {sub} · {d['duration_ms'] / 1000:.0f}s"]
 
     qev = (_check(d, "quota.models") or {}).get("evidence", {})
@@ -248,24 +320,36 @@ def render_preflight(d: Dict[str, Any], plain: bool = False) -> str:
     if n_a:
         out.append("  ▸ Model quota: not applicable — this accelerator's Bicep deploys no Azure OpenAI models")
     else:
-        out.append(f"  ▸ AI region: {region or 'none usable'} — {rec['why']}")
+        out.append(f"  ▸ AI region (models): {region or 'none usable'} — {rec['why']}")
     env_ev = rec["env"]
     loc = env_ev.get("location")
-    if loc:
-        out.append(f"  ▸ Primary location: {loc} — your azd env")
+    if prim["state"] in ("ok", "short"):
+        if prim.get("location"):
+            out.append(f"  ▸ Primary location (apps, data): {prim['location']} — {prim['why']}")
+        else:
+            out.append(f"  ▸ Primary location (apps, data): none usable — {_t(prim['why'], 110)}")
+    elif prim["state"] == "unchecked":
+        shown = loc or "not chosen yet"
+        out.append(f"  ▸ Primary location (apps, data): {shown} — App Service quota NOT checked: {_t(prim['why'], 90)}")
+    elif loc:
+        out.append(f"  ▸ Primary location (apps, data): {loc} — your azd env")
     elif rec["locations"]:
-        out.append(f"  ▸ Primary location: any of {', '.join(rec['locations'])}")
+        out.append(f"  ▸ Primary location (apps, data): not chosen — allowed: {', '.join(rec['locations'])}")
     rows = (qev.get("regions") or {}).get(region or "", {}).get("models", []) if region else []
     if rows:
         parts = [f"{r['model']} need {r['capacity']} / free {r['available']}{'' if r['ok'] else ' ❌'}" for r in rows]
         out.append("  ▸ Quota (K TPM, live from Azure): " + " · ".join(parts))
+    cline = _compute_line(prim, plain) if prim["state"] in ("ok", "short") else None
+    if cline:
+        out.append(cline)
     if rec["others"]:
-        out.append(f"  ▸ Other OK regions: {', '.join(rec['others'])}")
+        out.append(f"  ▸ Other OK AI regions: {', '.join(rec['others'])}")
 
     names = {
         "az.context": "login",
         "providers.registration": "providers",
         "quota.models": "quota",
+        "quota.compute": "App Service quota",
         "models.availability": "models/SKUs",
         "repo.tools": "tools",
         "repo.git_changes": "no local edits",
@@ -317,16 +401,35 @@ def render_preflight(d: Dict[str, Any], plain: bool = False) -> str:
         out.append(f"      {ev.get('snippet')}")
 
     steps: List[str] = []
+    set_loc = []
+    if prim.get("location") and prim["state"] == "ok" and loc != prim["location"]:
+        set_loc = [f"azd env set {prim['env']} {prim['location']}"]
     if not blocking and n_a:
-        steps.append("python -m accel_troubleshooter run -- azd up")
+        steps += set_loc + ["python -m accel_troubleshooter run -- azd up"]
     elif not blocking and region:
         if not env_ev.get("env_name"):
-            steps += ["azd env new <name>", f"azd env set AZURE_ENV_AI_SERVICE_LOCATION {region}"]
+            steps += ["azd env new <name>", f"azd env set {rec['ai_env']} {region}"]
         elif env_ev.get("ai_location") != region:
-            steps.append(f"azd env set AZURE_ENV_AI_SERVICE_LOCATION {region}")
+            steps.append(f"azd env set {rec['ai_env']} {region}")
+        steps += set_loc
+        if prim["state"] == "unchecked" and not loc:
+            steps.append(f"azd env set {prim['env']} <primary location with App Service quota>   (not checked here)")
         steps.append("python -m accel_troubleshooter run -- azd up")
     else:
-        for act in sorted(d.get("actions", {}).values(), key=lambda x: _CAT_ORDER[x["category"]])[:2]:
+        acts = d.get("actions", {})
+        picked: List[Dict[str, Any]] = []
+        for h in d.get("hypotheses", []):  # one fix per blocking cause, so no blocker is left without a step
+            if h["status"] not in ("confirmed", "likely"):
+                continue
+            for rid in h.get("remediation_ids", []):
+                act = acts.get(rid)
+                if act and act["category"] in (READ_ONLY, APPROVAL_REQUIRED) and act["commands"]:
+                    if act not in picked:
+                        picked.append(act)
+                    break
+        if not picked:
+            picked = sorted(acts.values(), key=lambda x: _CAT_ORDER[x["category"]])[:2]
+        for act in picked[:4]:
             runnable = act["category"] in (READ_ONLY, APPROVAL_REQUIRED) and act["commands"]
             cmd = act["commands"][0] if runnable else ""
             if act["id"].split("#")[0] == "set-ai-region" and region and act["params"].get("env"):

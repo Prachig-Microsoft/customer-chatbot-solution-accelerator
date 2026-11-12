@@ -62,6 +62,7 @@ DEPENDS = {
     "cleanup.inventory": ["rg.state"],
     "activity.failures": ["rg.state"],
     "quota.models": ["repo.config_drift"],
+    "quota.compute": ["repo.config_drift", "az.context"],
     "rbac.deployer_data": ["rg.state", "resources.state"],
     "models.availability": ["repo.config_drift"],
 }

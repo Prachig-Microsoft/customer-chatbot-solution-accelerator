@@ -46,6 +46,8 @@ def _overrides(args) -> Dict[str, Any]:
         o["resource_group"] = args.resource_group
     if getattr(args, "region", None):
         o["region"] = args.region
+    if getattr(args, "location", None):
+        o["location"] = args.location
     if getattr(args, "subscription", None):
         o["subscription"] = args.subscription
     if getattr(args, "all_regions", False):
@@ -277,6 +279,52 @@ def _tools_md(diag) -> str:
     return "\n".join(lines)
 
 
+def _compute_md(diag) -> str:
+    """App Service plan quota for the full preflight report (chat reads this, not the terminal summary)."""
+    from .compact import recommend_primary
+
+    cc = next((c for c in diag.checks if c.check_id == "quota.compute"), None)
+    if cc is None:
+        return ""
+    ev = cc.evidence or {}
+    lines = ["## Compute quota (App Service plans, primary location)", ""]
+    if ev.get("not_applicable"):
+        return "\n".join(lines + ["No App Service plan in the template: nothing to check."])
+    fl = ev.get("flavor")
+    if fl:
+        lines.append(f"Deployment flavor: `{fl['value']}` ({fl['source']}).")
+    for p in ev.get("plans", []):
+        lines.append(
+            f"- Plan `{p.get('name')}`: SKU **{p.get('sku') or 'unread'}** x{p.get('capacity') or '?'}"
+            + (" zone-redundant" if p.get("zone_redundant") else "")
+            + f", set at `{p.get('where')}`, region from `{p.get('location_param') or p.get('location_value') or '?'}`"
+            + (" (may be created: its condition could not be decided)" if p.get("conditional") else "")
+            + (f" — not read: {p['unresolved']}" if p.get("unresolved") else "")
+        )
+    lines += ["", f"**Status:** {cc.status.upper()} — {cc.summary}", ""]
+    table = ev.get("regions") or {}
+    if table:
+        lines += [
+            "| Location | SKU | Needed | Limit | In use | Free | Result | Basis |",
+            "|---|---|---|---|---|---|---|---|",
+        ]
+        for region, res in table.items():
+            if not res.get("rows"):
+                lines.append(f"| {region} | - | - | - | - | - | ❔ not read | {res.get('reason', '')} |")
+            for r in res.get("rows", []):
+                mark = "✅" if r.get("ok") else ("❌" if r.get("ok") is False else "❔")
+                used = r.get("used") if r.get("used") is not None else "not reported"
+                lines.append(
+                    f"| {region} | {r['sku']} | {r['need']} | {r.get('limit', '-')} | {used} | {r.get('free', '-')} | "
+                    f"{mark} | {r['basis']} |"
+                )
+    prim = recommend_primary(diag.to_dict())
+    if prim.get("location"):
+        lines += ["", f"Recommended primary location ({prim['env']}): **{prim['location']}** — {prim['why']}."]
+    lines.append("Source: Microsoft.Quota for Microsoft.Web (live, read-only), per location and SKU.")
+    return "\n".join(lines)
+
+
 def _quota_md(diag) -> str:
     qc = next((c for c in diag.checks if c.check_id == "quota.models"), None)
     if not qc or not qc.evidence.get("regions"):
@@ -352,15 +400,21 @@ def cmd_preflight(args) -> int:
             "az.context",
             "providers.registration",
             "quota.models",
+            "quota.compute",
             "models.availability",
         ],
     )
     blocking = [c for c in diag.checks if c.status in ("fail", "error")]
     quota = next((c for c in diag.checks if c.check_id == "quota.models"), None)
     checked = quota is not None and quota.status in ("pass", "fail", "warn", "info")
+    compute = next((c for c in diag.checks if c.check_id == "quota.compute"), None)
+    compute_unchecked = bool(compute and compute.status == "skip" and not compute.evidence.get("not_applicable"))
     label = "🛑 NO-GO" if blocking else ("✅ GO" if checked else "❔ NOT CHECKED")
+    if label == "✅ GO" and compute_unchecked:
+        label += " (models only; App Service quota not checked)"
     verdict = "## Preflight verdict: " + label + "\n" + "\n".join(f"- `{c.check_id}`: {c.summary}" for c in blocking)
-    _emit(args, diag.to_dict(), "preflight", extra_md=verdict + "\n\n" + _quota_md(diag) + "\n\n" + _tools_md(diag))
+    md = [verdict, _quota_md(diag), _compute_md(diag), _tools_md(diag)]
+    _emit(args, diag.to_dict(), "preflight", extra_md="\n\n".join(m for m in md if m))
     _finish(ts, diag)
     if blocking:
         return EXIT_FINDINGS
@@ -1178,6 +1232,7 @@ def build_parser() -> argparse.ArgumentParser:
             )
             sp.add_argument("--no-prompt", action="store_true", help="Never ask questions (for scripts/CI)")
             sp.add_argument("--region", help="AI services region (overrides azd env)")
+            sp.add_argument("--location", help="Primary location for apps and data (overrides AZURE_LOCATION)")
             sp.add_argument("--subscription", help="Expected subscription id")
             sp.add_argument(
                 "--window", help="How far back to read the apps' error logs, e.g. PT30M, PT6H, P1D (default PT1H)"

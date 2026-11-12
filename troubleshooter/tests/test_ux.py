@@ -641,7 +641,18 @@ def test_skills_are_valid_slash_commands():
     assert "OPTIONAL NEXT STEP" in health and "configure_auth" in health
     tags = ["**[Repo docs]**", "**[Repo code]**", "**[Live Azure]**", "**[External]**"]
     pre = skills["preflight"].read_text(encoding="utf-8")  # the answer shape is fixed, so it looks the same everywhere
-    assert all(h in pre for h in ("## ✅ GO", "**Recommended AI region:**", "**Live quota (K TPM):**", "**Blockers:**"))
+    assert all(
+        h in pre
+        for h in (
+            "## ✅ GO",
+            "**Recommended AI region (models):**",
+            "**Primary location (apps, data):**",
+            "**Live quota (K TPM):**",
+            "**Compute quota (App Service):**",
+            "**Blockers:**",
+        )
+    )
+    assert "models only; App Service quota not checked" in pre and "https://aka.ms/antquotahelp" in pre
     assert "**Model | Needed | Free | Scope**" in pre and "**Next deployment command" in pre
     assert pre.rindex("**Sources**") > pre.rindex("**Next deployment command")
     for name in ("health-check", "why-is-this-failing", "preflight"):  # each source line says repo, live or external
@@ -712,9 +723,9 @@ def test_preflight_go_is_a_short_answer_with_a_recommended_region(synthetic_fixt
     lines = text.splitlines()
     assert len(lines) <= 14, text
     assert lines[0].startswith("PREFLIGHT: ✅ GO")
-    assert "▸ AI region: eastus2 — your azd env choice, quota OK" in text
+    assert "▸ AI region (models): eastus2 — your azd env choice, quota OK" in text
     assert "▸ Quota (K TPM, live from Azure):" in text and "need 50 / free 900" in text
-    assert "• Blocking: none" in text and "▸ Other OK regions:" in text
+    assert "• Blocking: none" in text and "▸ Other OK AI regions:" in text
     assert "run -- azd up" in text and "azd env set" not in text  # region already chosen: nothing to set
 
 
@@ -756,7 +767,8 @@ def test_preflight_recommends_best_region_when_none_chosen(synthetic_fixture, tm
     env = tmp_path / "demo.env"
     env.write_text('AZURE_SUBSCRIPTION_ID="00000000-0000-0000-0000-00000000aaaa"\n', encoding="utf-8")
     text, _ = _preflight(synthetic_fixture, str(env))
-    assert "AI region: " in text and "best free quota" in text
+    assert "AI region (models): " in text and "best free model quota" in text
+    assert "also a valid primary location" not in text  # the AI region is never presented as the place for everything
     assert "▶ Next: azd env set AZURE_ENV_AI_SERVICE_LOCATION " in text and "run -- azd up" in text
 
 

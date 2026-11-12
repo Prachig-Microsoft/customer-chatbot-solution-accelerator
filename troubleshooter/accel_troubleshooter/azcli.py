@@ -97,6 +97,11 @@ _TOKEN_SCOPE = re.compile(r"^api://[0-9a-fA-F-]{36}/[A-Za-z_.]+$")
 _ARM_COMPONENT_PATH = (
     r"/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[\w.()-]+/providers/microsoft\.insights/components/[\w.-]+"
 )
+# App Service plan quota per region and SKU (read-only GET; verified to return "B3 VMs" limits like the ARM error).
+_WEB_QUOTA_PATH = (
+    r"/subscriptions/[0-9a-fA-F-]{36}/providers/Microsoft\.Web/locations/[a-z0-9]+/providers/Microsoft\.Quota/"
+    r"(?:quotas|usages)"
+)
 
 DEMO_SUBSCRIPTION = "00000000-0000-0000-0000-00000000aaaa"
 DEMO_TENANT = "00000000-0000-0000-0000-00000000bbbb"
@@ -140,8 +145,9 @@ def _now() -> str:
 
 
 def _rest_allowed(args: List[str]) -> bool:
-    """``az rest`` is generic, so allow only: --method get, to ARM Application Insights component reads or to the
-    Application Insights query API, with no body, headers or output file."""
+    """``az rest`` is generic, so allow only: --method get, to ARM Application Insights component reads, the App Service
+    quota reads (Microsoft.Quota for Microsoft.Web) or the Application Insights query API, with no body, headers or
+    output file."""
     if not args or args[0] != "rest":
         return False
     method = url = ""
@@ -166,7 +172,7 @@ def _rest_allowed(args: List[str]) -> bool:
     if method != "get" or u.scheme != "https" or u.query:
         return False
     if u.hostname == "management.azure.com":
-        return bool(re.fullmatch(_ARM_COMPONENT_PATH, u.path, re.I))
+        return bool(re.fullmatch(_ARM_COMPONENT_PATH, u.path, re.I) or re.fullmatch(_WEB_QUOTA_PATH, u.path, re.I))
     if u.hostname == "api.applicationinsights.io":
         return bool(re.fullmatch(r"/v1/apps/[0-9a-fA-F-]{36}/query", u.path))
     return False

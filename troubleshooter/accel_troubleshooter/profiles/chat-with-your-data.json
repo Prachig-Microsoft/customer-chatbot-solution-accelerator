@@ -36,6 +36,7 @@
     "quota_scripts": [],
     "quota_doc": "docs/QuotaCheck.md"
   },
+  "compute_skus": [],
   "azd_env_keys": {
     "subscription": "AZURE_SUBSCRIPTION_ID",
     "resource_group": "AZURE_RESOURCE_GROUP",
