@@ -14,7 +14,7 @@ SUB = "00000000-0000-0000-0000-00000000aaaa"
 WEB = f"https://management.azure.com/subscriptions/{SUB}/providers/Microsoft.Web/locations"
 REPORTED_ERROR = (
     "ERROR: error executing step command 'provision': deployment failed: InvalidTemplateDeployment: The template "
-    "deployment 'pgmacae2' is not valid according to the validation procedure. 'Microsoft.Web/serverFarms "
+    "deployment 'demo-deploy' is not valid according to the validation procedure. 'Microsoft.Web/serverFarms "
     "(2025-05-01)' reported preflight validation errors. InternalSubscriptionIsOverQuotaForSku: Operation cannot be "
     "completed without additional quota. Location: East US 2. Current Limit (B3 VMs): 0, Current Usage: 0, Amount "
     "required (B3 VMs): 1"
