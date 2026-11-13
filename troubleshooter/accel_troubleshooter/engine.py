@@ -47,7 +47,7 @@ NEEDS_RG = {
     "chat.e2e",
 }
 DEPENDS = {
-    "appinsights.errors": ["rg.state", "resources.state", "az.context"],
+    "appinsights.errors": ["rg.state", "resources.state", "az.context", "auth.setup"],
     "chat.e2e": ["rg.state", "resources.state", "webapp.state"],
     "auth.setup": ["webapp.state"],
     "rbac.app_identity": ["webapp.state"],
@@ -271,7 +271,7 @@ class Troubleshooter:
         else:
             env = load_env_file(Path(env_file)) if env_file else load_azd_env(repo, env_name)
         overrides = dict(overrides or {})
-        env_rg = env.get(profile.get("azd_env_keys", {}).get("resource_group"))
+        env_rg = env.get(profile.get("azd_env_keys", {}).get("resource_group")) or env.get("RESOURCE_GROUP_NAME")
         if overrides.get("resource_group") and env_rg and overrides["resource_group"] != env_rg:
             # A different resource group than the azd environment's: its names, URLs and capacities belong to another
             # deployment, so ignore them and discover everything from Azure instead.

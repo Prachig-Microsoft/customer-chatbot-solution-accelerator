@@ -19,6 +19,9 @@ in the Sources block at the very bottom.
 - one bullet per finding, with ⚠️ / ❌ / ℹ️ and plain-language detail (what, which resource, when). If the report gives no
   detail for a warning, say so (you cannot run commands; use `diagnose` or `search_docs` if more detail is needed).
 - anything that is your own interpretation rather than a tool label must be marked "(my interpretation)".
+- when the app-logs check says "Sign-in is enforced: N request(s) without a sign-in were rejected (HTTP 401), as
+  expected", report it as ℹ️ (sign-in working as intended), never as ❌ and never as a reason for "not healthy". If it
+  says more than half of the requests were rejected, that is a real ❌ finding (signed-in users are likely affected).
 
 **What passed**
 - one short bullet per area (login and providers, resource group, quota and models, model deployments, Fabric capacity

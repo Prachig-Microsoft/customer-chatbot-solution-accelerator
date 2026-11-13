@@ -208,3 +208,94 @@ def test_az_rest_is_get_only_and_limited_to_two_apis():
     assert not any(is_read_only(b) for b in bad)
     with pytest.raises(CommandNotAllowed):
         ReplayRunner({}).run(bad[0])
+
+
+# --------------------------------------------------------------------------- 401s once sign-in is configured
+
+CHAT_SETTINGS = "webapp config appsettings list --resource-group rg-demo --name api-chat-demo"
+SCENARIO_SETTINGS = "webapp config appsettings list --resource-group rg-demo --name api-scenario-demo"
+SIGN_IN = [{"name": "ENTRA_AUTH_CLIENT_ID", "value": "x"}, {"name": "ENTRA_AUTH_TENANT_ID", "value": "y"}]
+NO_SIGN_IN = "HTTP 401 error at https://api-scenario-demo.azurewebsites.net/api/auth/me Authentication required"
+
+
+def _signed_in(fx, on=True):
+    if on:
+        fx["commands"][CHAT_SETTINGS]["stdout"] = fx["commands"][CHAT_SETTINGS]["stdout"] + SIGN_IN
+        fx["commands"][SCENARIO_SETTINGS] = {"exit_code": 0, "stdout": SIGN_IN}
+    return fx
+
+
+def _rejections(n, text=NO_SIGN_IN):
+    return [[f"2026-11-03T06:{m:02d}:00Z", text, 3, "api-scenario-demo"] for m in range(n)]
+
+
+def _requests(n):
+    return [["2026-11-03T06:00:00Z", "GET /api/products", "200", "api-scenario-demo", n]]
+
+
+def _health(fx, env_file):
+    ts = Troubleshooter(REPO_ROOT, ReplayRunner(fx))
+    return ts.diagnose("check my deployment health", env_file=env_file, log=False, full=True)
+
+
+def test_rejected_requests_without_sign_in_are_expected_once_sign_in_is_configured(
+    synthetic_fixture, synthetic_env_file
+):
+    fx = _signed_in(_fixture(synthetic_fixture, traces=_rejections(2), requests=_requests(40)))
+    d = _health(fx, synthetic_env_file)
+    c = _check(d)
+    assert c.status == "pass" and "Sign-in is enforced: 2 request(s) without a sign-in were rejected" in c.summary
+    assert c.evidence["expected_rejections"]["count"] == 2 and not c.evidence["expected_rejections"]["mostly_rejected"]
+    assert not any(h.id == "observed-auth-token" for h in d.hypotheses)  # no "not healthy" from expected 401s
+
+
+def test_the_same_401s_are_a_finding_when_sign_in_is_not_configured(synthetic_fixture, synthetic_env_file):
+    fx = _signed_in(_fixture(synthetic_fixture, traces=_rejections(2), requests=_requests(40)), on=False)
+    d = _health(fx, synthetic_env_file)
+    assert _check(d).status == "fail" and _check(d).evidence["expected_rejections"] is None
+    assert any(h.id == "observed-auth-token" for h in d.hypotheses)
+
+
+def test_token_faults_are_still_findings_with_sign_in_configured(synthetic_fixture, synthetic_env_file):
+    fault = "401 Unauthorized: invalid audience in bearer token"
+    fx = _signed_in(_fixture(synthetic_fixture, traces=_rejections(2) + _rejections(3, fault), requests=_requests(40)))
+    d = _health(fx, synthetic_env_file)
+    c = _check(d)
+    assert c.status == "fail" and c.evidence["by_category"] == {"auth-token": 3}  # the 2 expected ones were set aside
+    assert "Sign-in is enforced: 2 request(s)" in c.summary
+    h = next(x for x in d.hypotheses if x.id == "observed-auth-token")
+    assert any("invalid audience" in r for r in h.rationale)
+
+
+def test_most_requests_rejected_means_signed_in_users_are_affected(synthetic_fixture, synthetic_env_file):
+    fx = _signed_in(_fixture(synthetic_fixture, traces=_rejections(30), requests=_requests(40)))
+    d = _health(fx, synthetic_env_file)
+    c = _check(d)
+    assert c.status == "fail" and "more than half" in c.summary and c.evidence["expected_rejections"]["mostly_rejected"]
+    assert any(h.id == "observed-auth-token" for h in d.hypotheses)
+
+
+def test_health_check_skill_reports_expected_rejections_as_info():
+    skill = (REPO_ROOT / ".github" / "skills" / "health-check" / "SKILL.md").read_text(encoding="utf-8")
+    assert "Sign-in is enforced" in skill and "never as ❌" in skill
+
+
+def test_the_telemetry_sdks_own_upload_errors_are_not_app_errors(synthetic_fixture, synthetic_env_file):
+    noise = [
+        [
+            "2026-11-03T06:00:00Z",
+            "ServiceResponseTimeoutError: Envelopes could not be exported and are not retryable",
+            3,
+            "api-chat-demo",
+        ],
+        [
+            "2026-11-03T06:01:00Z",
+            "ServiceResponseTimeoutError: Exception occurred while pinging live metrics.",
+            3,
+            "api-chat-demo",
+        ],
+    ]
+    d = _run(_fixture(synthetic_fixture, traces=noise, requests=_requests(10)), synthetic_env_file)
+    c = _check(d)
+    assert c.status == "pass" and c.evidence["telemetry_noise"] == 2 and c.evidence["by_category"] == {}
+    assert not any(h.id == "observed-timeout-network" for h in d.hypotheses)

@@ -48,6 +48,12 @@ CATEGORIES = [
     ),
 ]
 _CATEGORY_RX = [(name, re.compile(rx, re.I)) for name, rx in CATEGORIES]
+# The Application Insights SDK reporting that it could not upload its own telemetry: not a fault of the app.
+_TELEMETRY_NOISE = re.compile(
+    r"envelopes could not be exported|pinging live metrics|live ?metrics|quickpulse|exporting telemetry|"
+    r"azure\.monitor\.opentelemetry|transmission (of telemetry )?failed",
+    re.I,
+)
 
 _NORMALISE = [
     (re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"), "<id>"),
@@ -63,6 +69,53 @@ def classify_message(text: str) -> str:
         if rx.search(text or ""):
             return name
     return "other"
+
+
+# A request turned away for having no sign-in is what an API with Entra sign-in is supposed to do. Token faults are not.
+_NO_SIGN_IN = re.compile(
+    r"authentication (is )?required|not authenticated|missing (bearer |access )?token|no (bearer |access )?token"
+    r"|\b401\b|unauthori[sz]ed",
+    re.I,
+)
+_TOKEN_FAULT = re.compile(
+    r"invalid|expired|audience|issuer|tenant|signature|scope|aadsts|malformed|decode|not configured|mismatch", re.I
+)
+MOSTLY_REJECTED = 0.5  # if more than half of all requests are rejected, signed-in users are probably affected too
+MOSTLY_REJECTED_MIN = 10
+
+
+def split_expected_rejections(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Move "no sign-in" 401 groups out of the errors (only call when sign-in is configured on the APIs).
+
+    Returns {count, last, examples, mostly_rejected}; ``result`` is updated in place. When most requests are rejected,
+    nothing is moved: that pattern means signed-in users are turned away too (for example the front end sends no token).
+    """
+    expected = [
+        g
+        for g in result["groups"]
+        if g["category"] == "auth-token"
+        and g["source"] != "request"
+        and _NO_SIGN_IN.search(g["what"])
+        and not _TOKEN_FAULT.search(g["what"])
+    ]
+    count = sum(g["count"] for g in expected)
+    total = result.get("requests_total") or 0
+    mostly = bool(count >= MOSTLY_REJECTED_MIN and total and count > total * MOSTLY_REJECTED)
+    info = {
+        "count": count,
+        "last": max((g["last"] for g in expected), default=""),
+        "examples": [f"{g['role'] or 'app'}: {g['what']} (x{g['count']})" for g in expected[:3]],
+        "mostly_rejected": mostly,
+    }
+    if not expected or mostly:
+        return info
+    ids = {id(g) for g in expected}
+    result["groups"] = [g for g in result["groups"] if id(g) not in ids]
+    result["by_category"]["auth-token"] = result["by_category"].get("auth-token", 0) - count
+    if result["by_category"]["auth-token"] <= 0:
+        del result["by_category"]["auth-token"]
+    result["error_total"] -= count
+    return info
 
 
 def normalise(text: str, limit: int = 180) -> str:
@@ -91,8 +144,12 @@ def _minutes_ago(ts: Optional[str]) -> Optional[int]:
 def summarise(tables: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
     """Group the logged errors; every group keeps its count, latest time and category."""
     groups: Dict[tuple, Dict[str, Any]] = {}
+    noise = [0]
 
     def add(source: str, role: str, what: str, when: Any, count: int = 1) -> None:
+        if _TELEMETRY_NOISE.search(what or ""):
+            noise[0] += count
+            return
         key = (source, role, normalise(what))
         g = groups.setdefault(
             key, {"source": source, "role": role, "what": key[2], "count": 0, "last": "", "category": ""}
@@ -147,6 +204,7 @@ def summarise(tables: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
         "requests_total": requests_total,
         "requests_failed": requests_failed,
         "error_total": sum(g["count"] for g in ordered if g["source"] != "request"),
+        "telemetry_noise": noise[0],
     }
 
 
@@ -236,6 +294,9 @@ def appinsights_errors(ctx: DiagContext) -> CheckResult:
             "Could not query Application Insights (needs Reader/Monitoring Reader on it): " + failed[0],
         )
     result = summarise(tables)
+    sign_in = ctx.facts.get("auth_setup_state") == "configured"
+    expected = split_expected_rejections(result) if sign_in else {"count": 0, "mostly_rejected": False}
+    moved = expected["count"] if sign_in and not expected["mostly_rejected"] else 0
     ctx.facts["appinsights_errors"] = {**result, "window": window, "component": name}
     docs = _closest_docs(ctx, result["groups"][:3])
     ev = {
@@ -246,7 +307,19 @@ def appinsights_errors(ctx: DiagContext) -> CheckResult:
         "top_errors": [{**g, "minutes_ago": _minutes_ago(g["last"])} for g in result["groups"][:10]],
         "closest_docs": docs,
         "query_failures": failed,
+        "telemetry_noise": result.get("telemetry_noise", 0),
+        "expected_rejections": {**expected, "minutes_ago": _minutes_ago(expected.get("last"))} if sign_in else None,
     }
+    note = (
+        f" Sign-in is enforced: {moved} request(s) without a sign-in were rejected (HTTP 401), as expected."
+        if moved
+        else ""
+    )
+    if sign_in and expected["mostly_rejected"]:
+        note = (
+            f" {expected['count']} of {result['requests_total']} request(s) were rejected for missing sign-in: "
+            "more than half, so signed-in users are probably turned away too (is the front end sending the token?)."
+        )
     if not result["groups"]:
         if not any(tables.get(t) for t in TABLES):
             return CheckResult(
@@ -261,7 +334,7 @@ def appinsights_errors(ctx: DiagContext) -> CheckResult:
             "appinsights.errors",
             title,
             PASS,
-            f"No errors logged in the last {window} ({result['requests_total']} request(s) seen).",
+            f"No errors logged in the last {window} ({result['requests_total']} request(s) seen).{note}",
             evidence=ev,
         )
     known = {c: n for c, n in result["by_category"].items() if c != "other"}
@@ -271,6 +344,7 @@ def appinsights_errors(ctx: DiagContext) -> CheckResult:
         f"{result['error_total']} error(s) in the last {window}"
         + (f" ({parts})" if parts else "")
         + f"; most frequent: {top['what'][:90]}"
+        + note
     )
     return CheckResult("appinsights.errors", title, FAIL if known else WARN, summary, evidence=ev)
 
