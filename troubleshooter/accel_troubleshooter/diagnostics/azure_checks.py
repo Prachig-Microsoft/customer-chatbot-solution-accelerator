@@ -374,7 +374,10 @@ def resources_state(ctx: DiagContext) -> CheckResult:
         state = r.get("provisioningState")
         if state and state not in ("Succeeded",):
             bad.append({"name": r.get("name"), "type": r.get("type"), "state": state})
-    ctx.facts["resources"] = [{"name": r.get("name"), "type": r.get("type")} for r in res or []]
+    ctx.facts["resources"] = [
+        {"name": r.get("name"), "type": r.get("type"), "kind": r.get("kind"), "location": r.get("location")}
+        for r in res or []
+    ]
     expected = ctx.profile.get("expected_resource_types", [])
     missing = [t for t in expected if not any(k.lower() == t.lower() for k in by_type)]
     ctx.facts["missing_resource_types"] = missing
@@ -659,18 +662,78 @@ def models_availability(ctx: DiagContext) -> CheckResult:
     )
 
 
-def _ai_account(ctx: DiagContext) -> str:
-    name = ctx.env.get(ctx.env_key("ai_account"))
-    if name:
-        return name
-    for r in ctx.facts.get("resources", []):
-        if (r.get("type") or "").lower() == "microsoft.cognitiveservices/accounts":
-            return r["name"]
-    if not ctx.facts.get("resources") and ctx.resource_group and not ctx.rg_known_missing():
+AI_KINDS = ("aiservices", "openai")  # accounts that hold model deployments, best first
+# azd values that name the model account through its endpoint host (<name>.services.ai.azure.com / openai.azure.com ...)
+AI_ENDPOINT_KEYS = (
+    "AZURE_AI_PROJECT_ENDPOINT",
+    "AZURE_AI_AGENT_ENDPOINT",
+    "AZURE_OPENAI_ENDPOINT",
+    "AZURE_AI_SERVICES_ENDPOINT",
+    "AZURE_AI_FOUNDRY_ENDPOINT",
+    "AZURE_FOUNDRY_ENDPOINT",
+    "AI_FOUNDRY_ENDPOINT",
+)
+_HOST = re.compile(
+    r"https?://([a-z0-9-]+)\.(?:services\.ai\.azure\.com|openai\.azure\.com|cognitiveservices\.azure\.com)", re.I
+)
+
+
+def pick_ai_account(accounts: List[Dict[str, Any]], env: Any = None, env_key: Optional[str] = None) -> Dict[str, Any]:
+    """The account that holds the model deployments, from the AI-capable accounts in a resource group.
+
+    Order: the account named by the azd env key; the account whose host an azd endpoint names (for example
+    AZURE_AI_PROJECT_ENDPOINT -> aif-xxx); an AIServices account; an OpenAI account. Speech, Document Intelligence,
+    Content Safety and other kinds never hold model deployments, so they are never picked.
+    Returns {name, kind, location, why} or {} when there is none.
+    """
+    rows = [a for a in accounts if a.get("name")]
+    by_name = {a["name"].lower(): a for a in rows}
+
+    def out(a: Dict[str, Any], why: str) -> Dict[str, Any]:
+        return {"name": a["name"], "kind": a.get("kind"), "location": a.get("location"), "why": why}
+
+    named = env.get(env_key) if env is not None and env_key else None
+    if named:
+        a = by_name.get(named.lower(), {"name": named})
+        return out(a, f"azd env {env_key}")
+    for key in AI_ENDPOINT_KEYS:
+        value = env.get(key) if env is not None else None
+        m = _HOST.match(str(value or ""))
+        if m and m.group(1).lower() in by_name:
+            return out(by_name[m.group(1).lower()], f"host of azd env {key}")
+    for kind in AI_KINDS:
+        match = sorted((a for a in rows if str(a.get("kind") or "").lower() == kind), key=lambda a: a["name"])
+        if match:
+            return out(match[0], f"the {match[0].get('kind')} account in the resource group")
+    unknown = [a for a in rows if not a.get("kind")]  # older records without a kind: better than a Speech account
+    if unknown:
+        return out(unknown[0], "the only account whose kind is unknown")
+    return {}
+
+
+def _ai_accounts(ctx: DiagContext) -> List[Dict[str, Any]]:
+    rows = [
+        r
+        for r in ctx.facts.get("resources") or []
+        if (r.get("type") or "").lower() == "microsoft.cognitiveservices/accounts"
+    ]
+    if rows and all(r.get("kind") for r in rows):
+        return rows
+    if ctx.resource_group and not ctx.rg_known_missing():
         ok, data, _ = ctx.az("cognitiveservices", "account", "list", "--resource-group", ctx.resource_group)
-        if ok and data:
-            return data[0].get("name", "")
-    return ""
+        if ok and isinstance(data, list):
+            return [{"name": a.get("name"), "kind": a.get("kind"), "location": a.get("location")} for a in data]
+    return rows
+
+
+def _ai_account(ctx: DiagContext) -> str:
+    if "ai_account" not in ctx.facts:
+        key = ctx.env_key("ai_account")
+        if key and ctx.env.get(key):
+            ctx.facts["ai_account"] = {"name": ctx.env.get(key), "why": f"azd env {key}"}
+        else:
+            ctx.facts["ai_account"] = pick_ai_account(_ai_accounts(ctx), ctx.env)
+    return (ctx.facts["ai_account"] or {}).get("name", "")
 
 
 @check(
@@ -685,7 +748,12 @@ def ai_deployments(ctx: DiagContext) -> CheckResult:
         return skip
     acct = _ai_account(ctx)
     if not acct:
-        return CheckResult("ai.deployments", title, SKIP, "AI Services account not found in resource group.")
+        kinds = sorted({str(a.get("kind")) for a in _ai_accounts(ctx) if a.get("kind")})
+        extra = f" (only {kinds}, which hold no model deployments)" if kinds else ""
+        return CheckResult(
+            "ai.deployments", title, SKIP, f"No AI Services / OpenAI account in the resource group{extra}."
+        )
+    picked = ctx.facts.get("ai_account") or {}
     ok, data, _ = ctx.az(
         "cognitiveservices", "account", "deployment", "list", "--resource-group", ctx.resource_group, "--name", acct
     )
@@ -709,12 +777,13 @@ def ai_deployments(ctx: DiagContext) -> CheckResult:
     bad = [d for d in deps if d["state"] != "Succeeded"]
     ctx.facts["missing_ai_deployments"] = missing
     status = FAIL if (missing or bad) else PASS
-    summary = f"{len(deps)} deployment(s) on {acct}."
+    summary = f"{len(deps)} deployment(s) on {acct}" + (f" ({picked['why']})." if picked.get("why") else ".")
     if missing:
         summary += f" Missing: {missing}."
     if bad:
         summary += f" Not Succeeded: {[d['name'] for d in bad]}."
-    return CheckResult("ai.deployments", title, status, summary, evidence={"account": acct, "deployments": deps})
+    ev = {"account": acct, "account_kind": picked.get("kind"), "chosen_because": picked.get("why"), "deployments": deps}
+    return CheckResult("ai.deployments", title, status, summary, evidence=ev)
 
 
 def _exempt_tag(definition: Dict[str, Any]) -> Optional[Dict[str, str]]:

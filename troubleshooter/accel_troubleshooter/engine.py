@@ -281,8 +281,13 @@ class Troubleshooter:
                 ok, accounts, _ = self.runner.run(
                     ["cognitiveservices", "account", "list", "--resource-group", overrides["resource_group"]]
                 )
-                if ok and accounts:
-                    overrides["region"] = accounts[0].get("location") or ""
+                if ok and isinstance(accounts, list) and accounts:
+                    from .diagnostics.azure_checks import pick_ai_account
+
+                    rows = [
+                        {"name": a.get("name"), "kind": a.get("kind"), "location": a.get("location")} for a in accounts
+                    ]
+                    overrides["region"] = (pick_ai_account(rows) or {}).get("location") or ""
         ctx = DiagContext(
             profile=profile, repo=repo, issue=issue, env=env, runner=self.runner, index=idx, overrides=overrides
         )
