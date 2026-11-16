@@ -144,10 +144,15 @@ def build_resume_plan(d: Dict[str, Any], repo: Optional[Path] = None, pasted: st
     def step(name: str, state: str, detail: str) -> None:
         steps.append({"name": name, "state": state, "detail": detail})
 
-    # ---- 1. resource group
-    rg_gone = bool(rgc and rgc["status"] in ("fail", "error") and not n_resources)
-    if rg_gone:
+    # ---- 1. resource group: "gone" only on proof (rg.state FAIL = ResourceGroupNotFound), never on a read error
+    rg_ev = (rgc or {}).get("evidence") or {}
+    rg_deleting = bool(rgc and rgc["status"] == "fail" and rg_ev.get("provisioning_state") == "Deleting")
+    rg_gone = bool(rgc and rgc["status"] == "fail" and not rg_deleting)
+    rg_unreadable = bool(rgc and rgc["status"] == "error")
+    if rg_gone or rg_deleting:
         step("resource group", "failed", rgc["summary"])
+    elif rg_unreadable:
+        step("resource group", "pending", f"could not be read: {rgc['summary']}")
     elif not rgc or rgc["status"] == "skip":
         step("resource group", "pending", "no resource group found for this environment")
     else:
@@ -236,7 +241,18 @@ def build_resume_plan(d: Dict[str, Any], repo: Optional[Path] = None, pasted: st
 
     # ---- verdict
     post = steps[2]["state"]
-    if steps[0]["state"] == "failed" or (steps[0]["state"] == "pending" and not n_resources):
+    if rg_unreadable:
+        verdict, label = "unknown", "CANNOT VERIFY"
+        why.append(
+            "the resource group could not be read (expired sign-in, no permission or a network problem), so it is not "
+            "known whether anything was deployed; nothing is safe to re-run yet"
+        )
+        next_cmds += ["az login   (or az account set --subscription <id>), then run resume again"]
+    elif rg_deleting:
+        verdict, label = "wait", "WAIT"
+        why.append("the resource group is being deleted; a new deployment into it would fail")
+        next_cmds += [f"wait until az group exists --name {rg} prints false, then: azd up"]
+    elif rg_gone or (steps[0]["state"] == "pending" and not n_resources):
         verdict, label = "nothing", "NOTHING TO RESUME"
         why.append("the resource group does not exist or is empty: there is no half-finished deployment to continue")
         next_cmds += ["azd up   (starts a fresh deployment; use azd env new <name> first if this environment is stale)"]
@@ -325,7 +341,14 @@ def build_resume_plan(d: Dict[str, Any], repo: Optional[Path] = None, pasted: st
 
 def render_resume(plan: Dict[str, Any], plain: bool = False) -> str:
     icon = {"done": "OK" if plain else "✅", "failed": "!!" if plain else "❌", "pending": "--" if plain else "⏳"}
-    head = {"nothing": "➖", "wait": "⏳", "fix-first": "⛔", "resume-infra": "✅", "resume-last": "✅"}
+    head = {
+        "nothing": "➖",
+        "wait": "⏳",
+        "fix-first": "⛔",
+        "resume-infra": "✅",
+        "resume-last": "✅",
+        "unknown": "❔",
+    }
     bar = "#" if plain else "▌"
     out = [
         f"{bar}RESUME · {plan['accelerator']} · RG {plan['resource_group'] or '-'} · "

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from ..azcli import LOCAL_TOOLS
+from ..azcli import LOCAL_TOOLS, CommandNotAllowed
 from ..models import FAIL, INFO, PASS, SKIP, WARN, CheckResult
+from ..prereqscan import scan_components, setup_route
 from ..toolscan import FRIENDLY, scan_requirements, version_at_least
 from .base import DiagContext, check, parallel_map
 
@@ -54,6 +55,33 @@ def tools_and_versions(ctx: DiagContext) -> CheckResult:
             }
         )
     others = {t: v for t, (s, v) in installed.items() if s == "found" and t not in req["tools"]}
+    route = setup_route()
+    for comp, item in sorted(scan_components(ctx.repo).items()):
+        try:
+            state, ver, _ = ctx.runner.system_component(comp)
+        except CommandNotAllowed:
+            state, ver = "unknown", None
+        if state == "found":
+            status = "ok" if version_at_least(ver, item.get("min")) else "old"
+        else:
+            status = state  # missing / unknown
+        rows.append(
+            {
+                "tool": comp,
+                "kind": "component",
+                "name": item["name"],
+                "required": _need_text(item),
+                "min": item.get("min"),
+                "installed": ver,
+                "status": status,
+                "hard": item["level"] == "required",
+                "optional": False,
+                "level": item["level"],
+                "why": item["why"],
+                "devcontainer": item.get("devcontainer"),
+                "sources": item["sources"],
+            }
+        )
     ext_rows: List[Dict[str, Any]] = []
     if req["extensions"] and ctx.runner.mode != "offline":
         ok, data, _ = ctx.az("extension", "list")
@@ -65,22 +93,45 @@ def tools_and_versions(ctx: DiagContext) -> CheckResult:
     soft = [r for r in problems if r not in hard and not r["optional"]]
     optional = [r for r in problems if r not in hard and r["optional"]]
     missing_ext = [e for e in ext_rows if not e["ok"]]
-    ev = {"tools": rows, "other_tools": others, "extensions": ext_rows}
+    unverified = [
+        r["name"] for r in rows if r["status"] == "unknown" and not r["optional"] and r.get("level") != "conditional"
+    ]
+    ev = {
+        "tools": rows,
+        "other_tools": others,
+        "extensions": ext_rows,
+        "route": route,
+        "unverified_required": unverified,
+    }
 
     def words(rs: List[Dict[str, Any]]) -> str:
-        return "; ".join(
-            f"{r['name']} {'not installed' if r['status'] == 'missing' else r['installed'] + ' is older'} "
-            f"(docs: {r['required']})"
-            for r in rs
-        )
+        out = []
+        for r in rs:
+            have = "not installed" if r["status"] == "missing" else f"{r['installed']} is older"
+            text = f"{r['name']} {have} ({'needed' if r.get('kind') == 'component' else 'docs'}: {r['required']}"
+            if r.get("kind") == "component":
+                text += f"; {r['why']}; {'azd up runs it' if r['hard'] else 'needed when that script runs'}"
+                if r.get("devcontainer") and route == "local":
+                    text += "; the Dev Container installs it for you"
+            out.append(text + ")")
+        return "; ".join(out)
 
+    tail = f" Not verified: {', '.join(unverified)}." if unverified else ""
     if hard:
-        return CheckResult("repo.tools", title, FAIL, words(hard) + ".", evidence=ev)
+        return CheckResult("repo.tools", title, FAIL, words(hard) + "." + tail, evidence=ev)
     if soft or missing_ext:
         parts = [words(soft)] if soft else []
         if missing_ext:
             parts.append("Azure CLI extension(s) not installed: " + ", ".join(e["name"] for e in missing_ext))
-        return CheckResult("repo.tools", title, WARN, "; ".join(parts) + ".", evidence=ev)
+        return CheckResult("repo.tools", title, WARN, "; ".join(parts) + "." + tail, evidence=ev)
+    if unverified:
+        return CheckResult(
+            "repo.tools",
+            title,
+            WARN,
+            f"Could not verify required prerequisite(s): {', '.join(unverified)}.",
+            evidence=ev,
+        )
     if optional:
         return CheckResult(
             "repo.tools",
@@ -94,6 +145,6 @@ def tools_and_versions(ctx: DiagContext) -> CheckResult:
         "repo.tools",
         title,
         PASS,
-        f"{len(checked)} tool(s) match what the documents ask for.",
+        f"{len(checked)} tool(s) and prerequisite(s) match what the documents and scripts ask for ({route} setup).",
         evidence=ev,
     )

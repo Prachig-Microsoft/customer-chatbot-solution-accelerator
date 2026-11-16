@@ -482,7 +482,9 @@ def quota_table(ctx: DiagContext, regions: List[str]) -> Dict[str, Any]:
                 continue
             used, limit = int(u.get("currentValue") or 0), int(u.get("limit") or 0)
             avail = limit - used
-            need = r["capacity"] if isinstance(r["capacity"], int) else 0
+            need = r["capacity"] if isinstance(r["capacity"], int) else None
+            # Unknown need: only "no quota at all" is a definite shortfall; otherwise it is not proven either way.
+            ok = (avail >= need) if need is not None else (False if avail <= 0 else None)
             rows.append(
                 {
                     **_slim(r),
@@ -490,10 +492,19 @@ def quota_table(ctx: DiagContext, regions: List[str]) -> Dict[str, Any]:
                     "limit": limit,
                     "available": avail,
                     "scope": u.get("scopeType"),
-                    "ok": avail >= need,
+                    "ok": ok,
+                    **(
+                        {"note": "required capacity could not be resolved, so it was not compared"}
+                        if ok is None
+                        else {}
+                    ),
                 }
             )
-        table[region] = {"models": rows, "all_ok": all(x["ok"] for x in rows)}
+        table[region] = {
+            "models": rows,
+            "all_ok": all(x["ok"] is not False for x in rows),
+            "unresolved": [x["model"] for x in rows if x["ok"] is None],
+        }
     return table
 
 
@@ -518,6 +529,15 @@ def quota_models(ctx: DiagContext) -> CheckResult:
                 PASS,
                 "Not applicable: this accelerator's Bicep deploys no Azure OpenAI models, so no model quota to check.",
                 evidence={"not_applicable": True, "requirements": [], "regions": {}},
+            )
+        if ctx.profile.get("auto_derived"):
+            return CheckResult(
+                "quota.models",
+                title,
+                SKIP,
+                "The template deploys AI resources, but the model names and capacities could not be read from its "
+                "Bicep (no usageName metadata or plain inline deployment list), so model quota was not checked. Run "
+                "init-profile and fill iac.models.",
             )
         return CheckResult("quota.models", title, SKIP, "Profile defines no model deployments.")
     allowed = ctx.facts.get("allowed_ai_regions") or []
@@ -544,7 +564,7 @@ def quota_models(ctx: DiagContext) -> CheckResult:
     shortfalls = []
     for region, v in table.items():
         for m in v.get("models", []):
-            if not m["ok"]:
+            if m["ok"] is False:
                 shortfalls.append({"region": region, **m})
     ctx.facts["quota_shortfalls"] = shortfalls
     ref = [ctx.doc_ref(ctx.profile["iac"]["quota_doc"], "Check Quota|Quota"), ctx.ts_ref("InsufficientQuota")]
@@ -561,6 +581,18 @@ def quota_models(ctx: DiagContext) -> CheckResult:
             return CheckResult(
                 "quota.models", title, ERROR, f"Could not read quota in {target}: {t['error']}", evidence=ev
             )
+        if t.get("all_ok") and t.get("unresolved"):
+            ctx.facts["quota_ok"] = None
+            ev["capacity_unresolved"] = t["unresolved"]
+            return CheckResult(
+                "quota.models",
+                title,
+                WARN,
+                f"Quota read in {target}, but the required capacity of {', '.join(t['unresolved'])} could not be "
+                "resolved from the template or azd env, so it was not compared (set the capacity value and re-run).",
+                evidence=ev,
+                doc_refs=ref,
+            )
         if t.get("all_ok"):
             ctx.facts["quota_ok"] = True
             return CheckResult(
@@ -571,7 +603,7 @@ def quota_models(ctx: DiagContext) -> CheckResult:
             f"{m['model']} ({m['sku']}): need {m['capacity']}, "
             + (f"available {m['available']}" if m["available"] is not None else f"not offered in {target}")
             for m in t.get("models", [])
-            if not m["ok"]
+            if m["ok"] is False
         ]
         return CheckResult(
             "quota.models",
@@ -581,12 +613,16 @@ def quota_models(ctx: DiagContext) -> CheckResult:
             evidence=ev,
             doc_refs=ref,
         )
+    unresolved = sorted({m for r in candidates for m in table[r].get("unresolved", [])})
+    if candidates and unresolved:
+        ev["capacity_unresolved"] = unresolved
     return CheckResult(
         "quota.models",
         title,
-        PASS if candidates else FAIL,
+        (WARN if unresolved else PASS) if candidates else FAIL,
         (
             f"Regions with sufficient quota for all models: {candidates}"
+            + (f" (required capacity of {', '.join(unresolved)} not resolved, so not compared)" if unresolved else "")
             if candidates
             else "No allowed region has sufficient quota for all models."
         ),

@@ -248,19 +248,22 @@ def _tools_md(diag) -> str:
     if not tc or tc.status == "skip":
         return ""
     ev = tc.evidence or {}
-    mark = {"ok": "✅", "old": "⚠️ older", "missing": "⚠️ not installed", "unknown": "❔ not read"}
+    mark = {"ok": "✅", "old": "⚠️ older", "missing": "⚠️ not installed", "unknown": "❔ not verified"}
     lines = [
         "## Tools (as the docs ask)",
         "",
-        "| Tool | Installed | Docs ask for | Status | Where the docs say so |",
+        *([f"Setup route detected: **{ev['route']}**.", ""] if ev.get("route") else []),
+        "| Tool / component | Installed | Asked for | Status | Where it is asked for |",
         "|---|---|---|---|---|",
     ]
     for r in ev.get("tools", []):
-        need = (
-            r["required"]
-            + (" (optional)" if r.get("optional") else "")
-            + (" (required by azd)" if r.get("hard") else "")
-        )
+        need = r["required"] + (" (optional)" if r.get("optional") else "")
+        if r.get("kind") == "component":
+            need += " (required: azd up runs it)" if r.get("level") == "required" else " (conditional)"
+            if r.get("devcontainer"):
+                need += "; the Dev Container installs it"
+        elif r.get("hard"):
+            need += " (required by azd)"
         src = ", ".join(r.get("sources", [])[:2])
         lines.append(
             f"| {r['name']} | {r['installed'] or '-'} | {need} | {mark.get(r['status'], r['status'])} | {src} |"
@@ -349,7 +352,7 @@ def _quota_md(diag) -> str:
         for m in v["models"]:
             lines.append(
                 f"| {region} | {m['model']} | {m['used']}/{m['limit']} | {m['available']} | {m['scope']} | "
-                f"{'✅' if m['ok'] else '❌'} |"
+                f"{'✅' if m['ok'] else ('❔ need unknown' if m['ok'] is None else '❌')} |"
             )
     cands = qc.evidence.get("regions_with_sufficient_quota") or []
     lines += ["", f"**Regions with sufficient quota for every model:** {cands or 'none'}"]
@@ -410,8 +413,18 @@ def cmd_preflight(args) -> int:
     compute = next((c for c in diag.checks if c.check_id == "quota.compute"), None)
     compute_unchecked = bool(compute and compute.status == "skip" and not compute.evidence.get("not_applicable"))
     label = "🛑 NO-GO" if blocking else ("✅ GO" if checked else "❔ NOT CHECKED")
-    if label == "✅ GO" and compute_unchecked:
-        label += " (models only; App Service quota not checked)"
+    tools_check = next((c for c in diag.checks if c.check_id == "repo.tools"), None)
+    unverified = ((tools_check.evidence or {}).get("unverified_required") or []) if tools_check else []
+    qcheck = next((c for c in diag.checks if c.check_id == "quota.models"), None)
+    unresolved = ((qcheck.evidence or {}).get("capacity_unresolved") or []) if qcheck else []
+    if label == "✅ GO":
+        caveats = (
+            (["models only; App Service quota not checked"] if compute_unchecked else [])
+            + (["model capacity not resolved: " + ", ".join(unresolved)] if unresolved else [])
+            + (["prerequisites not verified: " + ", ".join(unverified)] if unverified else [])
+        )
+        if caveats:
+            label += " (" + "; ".join(caveats) + ")"
     verdict = "## Preflight verdict: " + label + "\n" + "\n".join(f"- `{c.check_id}`: {c.summary}" for c in blocking)
     md = [verdict, _quota_md(diag), _compute_md(diag), _tools_md(diag)]
     _emit(args, diag.to_dict(), "preflight", extra_md="\n\n".join(m for m in md if m))
@@ -1030,6 +1043,7 @@ def _delete_flow(ts: Troubleshooter, args, diag, plan: Dict[str, Any], repo) -> 
         "env_rg": t.get("env_resource_group") or "",
         "env_subscription": t.get("env_subscription") or "",
         "predown": script_of(plan["predown"]) if plan.get("predown") else "",
+        "requested_subscription": (getattr(args, "subscription", None) or "").strip(),
     }
     snap = delete_rg.snapshot(ts.runner, rg)
     verdict = delete_rg.assess(snap, **ctx)

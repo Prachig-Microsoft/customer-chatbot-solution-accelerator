@@ -299,3 +299,18 @@ def test_the_telemetry_sdks_own_upload_errors_are_not_app_errors(synthetic_fixtu
     c = _check(d)
     assert c.status == "pass" and c.evidence["telemetry_noise"] == 2 and c.evidence["by_category"] == {}
     assert not any(h.id == "observed-timeout-network" for h in d.hypotheses)
+
+
+def test_a_clean_result_with_some_tables_unreadable_is_not_a_pass(synthetic_fixture, synthetic_env_file):
+    fx = _fixture(synthetic_fixture, requests=[["2026-11-03T06:00:00Z", "GET /health", "200", "api-chat-demo", 20]])
+    for table in ("exceptions", "traces"):
+        fx["commands"][_query(table)] = {"exit_code": 1, "stderr": "(Forbidden) no access"}
+    c = _check(_run(fx, synthetic_env_file))
+    assert c.status == "warn" and "2 of 4 log table(s) could not be read" in c.summary
+
+
+def test_the_read_only_allow_list_matches_whole_words_only():
+    assert is_read_only(["cognitiveservices", "account", "list", "--resource-group", "rg"])
+    assert is_read_only(["cognitiveservices", "account", "list-deleted"])  # listed on its own
+    assert not is_read_only(["cognitiveservices", "account", "list-keys", "--name", "x", "--resource-group", "rg"])
+    assert not is_read_only(["group", "showx", "--name", "rg"])

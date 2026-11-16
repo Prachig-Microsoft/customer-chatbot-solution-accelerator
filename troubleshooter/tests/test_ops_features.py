@@ -106,7 +106,7 @@ def test_everything_installed_and_new_enough_passes(tmp_path):
         extensions=[{"name": "microsoft-fabric", "version": "1.0"}],
     )
     c = _tools_check(d)
-    assert c.status == "pass" and "match what the documents ask for" in c.summary
+    assert c.status == "pass" and "match what the documents and scripts ask for" in c.summary
 
 
 def test_azd_below_the_azure_yaml_minimum_is_a_blocker(tmp_path):
@@ -156,7 +156,7 @@ def test_preflight_lists_the_tools_as_the_docs_ask_and_the_others_that_are_insta
         "preflight", log=False, only_checks=["repo.tools", "quota.models"]
     )
     text = render_compact(d.to_dict(), "preflight")
-    assert "Tools (as the docs ask):" in text and "azd 1.34.0 (needs >= 1.23.11)" in text
+    assert "Tools (as the docs ask, " in text and "azd 1.34.0 (needs >= 1.23.11)" in text
     assert "Also installed: git 2.55.0, node 24.0.0" in text
     assert "extension 'microsoft-fabric' is not installed (docs: README.md:9)" in text
 
@@ -335,6 +335,24 @@ def test_missing_rg_or_an_empty_group_has_nothing_to_resume(tmp_path):
     }
     plan = build_resume_plan(_diag({"rg.state": gone, "resources.state": empty}), _accelerator(tmp_path))
     assert plan["verdict"] == "nothing" and "azd up" in plan["next"][0]
+
+
+def test_a_group_that_could_not_be_read_is_not_reported_as_gone(tmp_path):
+    unreadable = {"status": "error", "summary": "Could not read resource group: AuthorizationFailed", "evidence": {}}
+    plan = build_resume_plan(_diag({"rg.state": unreadable}), _accelerator(tmp_path))
+    assert plan["verdict"] == "unknown" and plan["label"] == "CANNOT VERIFY" and plan["run"] == []
+    assert plan["next"][0].startswith("az login")
+    assert "CANNOT VERIFY" in render_resume(plan, plain=True)
+
+
+def test_a_group_being_deleted_means_wait_not_a_fresh_azd_up(tmp_path):
+    deleting = {
+        "status": "fail",
+        "summary": "Resource group 'rg-x' is being deleted.",
+        "evidence": {"provisioning_state": "Deleting"},
+    }
+    plan = build_resume_plan(_diag({"rg.state": deleting, "resources.state": OK_RES}), _accelerator(tmp_path))
+    assert plan["verdict"] == "wait" and plan["run"] == [] and "being deleted" in " ".join(plan["why"])
 
 
 AZD_OK = {

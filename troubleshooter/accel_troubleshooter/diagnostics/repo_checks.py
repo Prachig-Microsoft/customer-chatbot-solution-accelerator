@@ -177,6 +177,15 @@ def azd_env(ctx: DiagContext) -> CheckResult:
             f" {len(placeholders)} placeholder value(s) — expected for post-provision outputs that are "
             "written to App Service settings rather than the azd env."
         )
+    env_ai, cfg_ai = ctx.env.get(keys.get("ai_location")), ctx.env.params.get(ai_param)
+    conflict = None
+    if env_ai and cfg_ai and str(env_ai).lower() != str(cfg_ai).lower():
+        conflict = {"env_key": keys.get("ai_location"), "env": env_ai, "param": ai_param, "config": cfg_ai}
+        summary += (
+            f" .env {keys.get('ai_location')}={env_ai} differs from config.json {ai_param}={cfg_ai}; azd uses the "
+            ".env value."
+        )
+        status = WARN
     return CheckResult(
         "repo.azd_env",
         "azd environment present and complete",
@@ -194,6 +203,7 @@ def azd_env(ctx: DiagContext) -> CheckResult:
             "resource_group": ctx.env.get(keys.get("resource_group")),
             "ai_location": ctx.env.get(keys.get("ai_location")) or ctx.env.params.get(ai_param) or None,
             "location": ctx.env.get(keys.get("location")) or ctx.env.params.get(iac_loc_param) or None,
+            "ai_location_conflict": conflict,
         },
     )
 

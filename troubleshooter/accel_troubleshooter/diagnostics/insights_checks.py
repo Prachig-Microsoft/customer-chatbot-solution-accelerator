@@ -330,6 +330,15 @@ def appinsights_errors(ctx: DiagContext) -> CheckResult:
                 "wait a few minutes and run it again.",
                 evidence=ev,
             )
+        if failed:
+            return CheckResult(
+                "appinsights.errors",
+                title,
+                WARN,
+                f"No errors found in the last {window}, but {len(failed)} of {len(TABLES)} log table(s) could not be "
+                f"read, so errors there are not ruled out: {failed[0]}",
+                evidence=ev,
+            )
         return CheckResult(
             "appinsights.errors",
             title,

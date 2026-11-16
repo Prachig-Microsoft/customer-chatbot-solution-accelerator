@@ -181,6 +181,50 @@ def _pick(params: Dict[str, Any], model: str, hint: str, want_type: str, default
     return cands[0] if len(cands) == 1 else None
 
 
+_MODEL_BLOCK = re.compile(r"\bmodel\s*:\s*\{([^{}]*)\}\s*,?\s*sku\s*:\s*\{([^{}]*)\}", re.S)
+_SKU_FIRST = re.compile(r"\bsku\s*:\s*\{([^{}]*)\}\s*,?\s*model\s*:\s*\{([^{}]*)\}", re.S)
+
+
+def _field(block: str, key: str, params: Dict[str, Any]) -> Any:
+    """A literal ('x' or 12) or a parameter with a literal default; None when it is any other expression."""
+    m = re.search(rf"^\s*{key}\s*:\s*(.+?)\s*$", block, re.M)
+    if not m:
+        return None
+    raw = m.group(1).split("//", 1)[0].strip().rstrip(",")
+    if re.fullmatch(r"'[^']*'", raw):
+        return raw[1:-1]
+    if raw.isdigit():
+        return int(raw)
+    p = params.get(raw)
+    return p.default if p is not None and isinstance(p.default, (str, int)) else None
+
+
+def _inline_models(text: str, params: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Model deployments written inline (``deployments: [{ model: {...} sku: {...} }]``), when no usageName exists.
+
+    Only OpenAI-format entries whose model name and SKU resolve to literals are kept; capacity may stay unresolved
+    (None), and the quota check then says it could not compare rather than guessing.
+    """
+    out: List[Dict[str, Any]] = []
+    hits = [(m.group(1), m.group(2)) for m in _MODEL_BLOCK.finditer(text)]
+    hits += [(m.group(2), m.group(1)) for m in _SKU_FIRST.finditer(text)]
+    for model_block, sku_block in hits:
+        fmt = _field(model_block, "format", params)
+        name, sku = _field(model_block, "name", params), _field(sku_block, "name", params)
+        if (fmt and str(fmt).lower() != "openai") or not isinstance(name, str) or not isinstance(sku, str):
+            continue
+        cap = _field(sku_block, "capacity", params)
+        entry = {
+            "usage_name": f"OpenAI.{sku}.{name}",
+            "sku": sku,
+            "model": name,
+            "capacity": cap if isinstance(cap, int) else None,
+        }
+        if entry not in out:
+            out.append(entry)
+    return out
+
+
 def _models(params: Dict[str, Any], usage: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     models: List[Dict[str, Any]] = []
     chat_taken = False
@@ -230,6 +274,12 @@ def derive_profile(repo: Path) -> Optional[Dict[str, Any]]:
         None,
     )
     usage = parse_usage_names(ai_param.usage_names) if ai_param else []
+    inline = False
+    if not usage and main:
+        usage = _inline_models(_read(repo / main), params)
+        inline = bool(usage)
+        if inline and not ai_param and "location" in params:
+            ai_param = params["location"]  # no separate AI region: the models are created in the primary location
     parameters_rel = next(
         (r for r in ("infra/main.parameters.json", "main.parameters.json") if (repo / r).exists()), None
     )
@@ -241,6 +291,8 @@ def derive_profile(repo: Path) -> Optional[Dict[str, Any]]:
     ai_env = (env_map.get(ai_param.name) or {}).get("env") if ai_param else None
     if ai_env:
         keys["ai_location"] = ai_env
+    elif ai_param is not None and ai_param.name == "location" and "location" in keys:
+        keys["ai_location"] = keys["location"]
 
     providers = _providers(repo)
     quota_doc = (docs.get("quota") or ["README.md"])[0]
@@ -259,6 +311,8 @@ def derive_profile(repo: Path) -> Optional[Dict[str, Any]]:
     }
     if ai_param:
         iac["ai_location_param"] = ai_param.name
+    if inline:
+        iac["models_from"] = f"inline deployments in {main} (no usageName metadata)"
     if not iac["models"] and not _uses_models(repo, providers):
         iac["no_model_quota"] = True  # nothing in the Bicep deploys a model, so "no quota to check" is the right answer
     if "location" in params:

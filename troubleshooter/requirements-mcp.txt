@@ -1,2 +1,2 @@
 # Optional: MCP server for GitHub Copilot agent mode (accel_troubleshooter.mcp_server)
-mcp>=1.10,<2
+mcp>=1.27.1,<1.28  # tested version; widen only after re-running the MCP tests

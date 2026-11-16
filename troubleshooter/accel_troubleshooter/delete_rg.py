@@ -11,7 +11,8 @@ path (``actions.EXECUTABLE_ACTIONS`` / ``apply_fix``), so no other flow can reac
 4. Second confirmation: the user types ``delete <name>``.
 5. Right before deleting, the group is read again; if it no longer exists, a lock appeared, the subscription changed or
    any resource was added or removed (the fingerprint differs), nothing is deleted.
-6. Exactly one command runs: ``az group delete --name <name> --yes --no-wait``. Nothing else is deleted or purged.
+6. Exactly one command runs: ``az group delete --name <name> --subscription <checked id> --yes --no-wait``. Nothing else
+   is deleted or purged.
 7. It waits until Azure reports the group gone, lists soft-deleted AI accounts that came from that group (purge
    commands are shown, never run) and appends a record to ``.runs/deletions.jsonl``.
 """
@@ -92,12 +93,24 @@ def fingerprint(snap: Dict[str, Any]) -> str:
 
 
 def assess(
-    snap: Dict[str, Any], azd_env: str = "", env_rg: str = "", env_subscription: str = "", predown: str = ""
+    snap: Dict[str, Any],
+    azd_env: str = "",
+    env_rg: str = "",
+    env_subscription: str = "",
+    predown: str = "",
+    requested_subscription: str = "",
 ) -> Dict[str, Any]:
     """Blockers stop the delete; warnings are shown before the user confirms."""
     rg = snap["resource_group"]
     blockers: List[str] = list(snap.get("errors", []))
     warnings: List[str] = []
+    signed_in = {str(snap.get(k) or "").lower() for k in ("subscription_id", "subscription_name")} - {""}
+    if requested_subscription and signed_in and requested_subscription.lower() not in signed_in:
+        blockers.append(
+            f"you asked for subscription {requested_subscription} but az is signed in to "
+            f"{snap.get('subscription_name') or snap.get('subscription_id')}: run az account set --subscription "
+            f"{requested_subscription} first, so the right group is checked and deleted"
+        )
     if not snap.get("exists") and not snap.get("errors"):
         blockers.append(f"resource group '{rg}' does not exist in subscription {snap.get('subscription_name')}")
     if snap.get("locks"):
@@ -170,6 +183,7 @@ def delete_resource_group(
     env_subscription: str = "",
     predown: str = "",
     progress: Optional[Callable[[str], None]] = None,
+    requested_subscription: str = "",
 ) -> Dict[str, Any]:
     say = progress or (lambda _m: None)
     result: Dict[str, Any] = {"resource_group": rg, "deleted": False, "results": []}
@@ -187,7 +201,7 @@ def delete_resource_group(
         return refuse("no fingerprint of the plan you confirmed: run the cleanup plan first")
     say("Checking the resource group again right before deleting…")
     snap = snapshot(runner, rg)
-    verdict = assess(snap, azd_env, env_rg, env_subscription, predown)
+    verdict = assess(snap, azd_env, env_rg, env_subscription, predown, requested_subscription)
     if verdict["blockers"]:
         return refuse("; ".join(verdict["blockers"]))
     if verdict["fingerprint"] != expected_fingerprint:
@@ -195,7 +209,8 @@ def delete_resource_group(
             "the group changed since you confirmed (resources added or removed, or another subscription): "
             "run the cleanup plan again and re-check what would be deleted"
         )
-    cmd = f"az group delete --name {rg} --yes --no-wait"
+    sub_id = str(snap.get("subscription_id") or "")
+    cmd = f"az group delete --name {rg}" + (f" --subscription {sub_id}" if sub_id else "") + " --yes --no-wait"
     say(f"  ▶ {cmd}")
     start = time.time()
     code, out, _ = _run_one(cmd, repo, 600)

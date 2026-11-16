@@ -11,7 +11,7 @@ argument-hint: optional resource group name or the error azd showed
    from azd's own provision deployment, so never say the infrastructure is deployed unless the tool says
    "azd provision ... Succeeded".
 
-Answer in **exactly this order**: **Verdict** (the tool's label, unchanged: NOTHING TO RESUME, NOTHING HALTED, WAIT,
+Answer in **exactly this order**: **Verdict** (the tool's label, unchanged: NOTHING TO RESUME, NOTHING HALTED, WAIT, CANNOT VERIFY,
 FIX FIRST, SAFE TO RESUME, SAFE TO RESUME THE LAST STEP), **Where it stopped** (one bullet per step with ✅ / ❌ / ⏳ and the
 tool's detail), **Why** (the reasons, plainly, including what the pasted error means), **Also found** (other health-check
 findings, if any), **Next step**, then "Ask next", then **Sources**.
@@ -23,7 +23,9 @@ findings, if any), **Next step**, then "Ask next", then **Sources**.
   user's terminal as `python -m accel_troubleshooter run -- <command>` (it diagnoses automatically if it fails), or
   `python -m accel_troubleshooter resume` there, which offers to run it after they type yes. You do not run `azd`
   yourself: it is long-running and interactive.
-- WAIT: say what is still running and to check again later.
+- WAIT: say what is still running (or that the group is being deleted) and to check again later.
+- CANNOT VERIFY: the resource group could not be read (sign-in, permission or network). Say that nothing is known yet,
+  give the sign-in step from the report, and never suggest `azd up` or treat the group as gone.
 If the report says the post-provision step cannot be verified, say so and ask for its error; never claim it finished.
 
 **Sources** (last, one line each, each starting with a bold origin tag): **[Repo docs]** 📘, **[Repo code]** 🧩 (for

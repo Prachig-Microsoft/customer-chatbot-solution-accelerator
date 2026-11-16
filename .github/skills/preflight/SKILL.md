@@ -11,7 +11,8 @@ Then answer in **exactly this shape** (it matches what the team agreed on; use t
 
 First line, as a heading: `## ✅ GO`, `## 🛑 NO-GO` or `## ❔ NOT CHECKED` (never GO when the tool says NOT CHECKED).
 When the report says **"GO (models only; App Service quota not checked)"**, use exactly that heading; never shorten it to
-a plain GO. Then these bullets, in this order:
+a plain GO. The same applies to any other caveat in brackets ("model capacity not resolved: …", "prerequisites not
+verified: …"): copy the heading as the report writes it. Then these bullets, in this order:
 
 - **Recommended AI region (models):** `<region>` — one clause on why (your azd choice, or best free model quota) and
   that the live checks confirm quota and availability of the models, versions and deployment types. When the report
@@ -35,7 +36,14 @@ a plain GO. Then these bullets, in this order:
   with the installed version and the minimum the documents ask for, ✅ or ⚠️ (for example "⚠️ Python 3.11.9, docs ask
   >= 3.12"), and name any missing tool or Azure CLI extension and which document asks for it (a tool the docs mark
   optional, such as Docker for the Dev Container route, is not a blocker). Mention "also installed" tools only briefly.
-  Do not fold tool problems into Warnings; they belong here.
+  Do not fold tool problems into Warnings; they belong here. The same table lists **system components** the
+  accelerator's own hooks and scripts need (for example the Microsoft ODBC Driver for SQL Server when a post-provision
+  hook installs `pyodbc`): say whether it is required (`azd up` runs it) or conditional, the setup route the report
+  detected (local, Dev Container, Codespaces), and, when the report says so, that the Dev Container installs it. A
+  required component that is "not verified" is never ✅: say it could not be checked and how to confirm it.
+- **Region note:** when the azd environment already chose a region and it passed, do not list alternative
+  regions. When the report shows a heads-up that `.env` and `config.json` disagree on the AI region, repeat it in one
+  line (azd uses the `.env` value, which is what was checked).
 - **Blockers:** none, or the blockers with the smallest fix. For an App Service quota blocker give the options in this
   order, safest first: (1) 🟡 choose a primary location the report shows has quota (`azd env set AZURE_LOCATION
   <location>`); (2) 🔴 request the quota (https://aka.ms/antquotahelp; needs someone with quota rights to approve);

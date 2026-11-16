@@ -113,7 +113,7 @@ def test_deletes_only_that_group_with_exactly_one_command_and_reports_leftovers(
 
     monkeypatch.setattr(telemetry, "RUNS_FILE", tmp_path / "runs.jsonl")
     res = _delete(_fx())
-    assert res["deleted"] and executed == [f"az group delete --name {RG} --yes --no-wait"]
+    assert res["deleted"] and executed == [f"az group delete --name {RG} --subscription {SUB} --yes --no-wait"]
     assert [s["name"] for s in res["soft_deleted"]] == ["aif"]  # only the one that came from this group
     assert "purge" in res["soft_deleted"][0]["purge"]
     log = [json.loads(x) for x in (tmp_path / "deletions.jsonl").read_text(encoding="utf-8").splitlines()]
@@ -162,6 +162,15 @@ def test_locks_missing_group_and_wrong_subscription_block_it(executed):
     snap, v = _plan(_fx(), env_rg=RG, env_subscription="22222222-2222-2222-2222-222222222222")
     assert any("az account set" in b for b in v["blockers"])
     assert executed == []
+
+
+def test_a_subscription_the_user_named_must_be_the_one_az_is_signed_in_to(executed):
+    _, v = _plan(_fx(), requested_subscription="33333333-3333-3333-3333-333333333333")
+    assert any("you asked for subscription 33333333" in b for b in v["blockers"])
+    res = _delete(_fx(), requested_subscription="33333333-3333-3333-3333-333333333333")
+    assert not res["deleted"] and "you asked for subscription" in res["refused"] and executed == []
+    for same in (SUB, SUB.upper(), "demo-subscription"):  # by id or by name
+        assert not _plan(_fx(), requested_subscription=same)[1]["blockers"]
 
 
 def test_no_fingerprint_means_no_delete(executed):

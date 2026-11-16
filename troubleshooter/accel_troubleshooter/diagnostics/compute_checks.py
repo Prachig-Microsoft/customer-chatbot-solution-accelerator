@@ -60,7 +60,7 @@ def compute_requirements(ctx: DiagContext) -> Dict[str, Any]:
         ]
     for p in plans:
         role = "primary"
-        if p.get("location_param") and ai_param and p["location_param"] == ai_param:
+        if p.get("location_param") and ai_param and ai_param != loc_param and p["location_param"] == ai_param:
             role = "ai"
         elif p.get("location_value"):
             role = "fixed"
@@ -214,7 +214,11 @@ def compute_quota(ctx: DiagContext) -> CheckResult:
             ([target] if target else []) + (allowed if (ctx.overrides.get("all_regions") or not target) else [])
         )
     )
-    ev.update(target_location=target or None, allowed_locations=allowed)
+    ev.update(
+        target_location=target or None,
+        target_source="--location" if ctx.overrides.get("location") else ("azd env" if target else None),
+        allowed_locations=allowed,
+    )
     label = ", ".join(f"{s}{' (zone redundant)' if z else ''} x{n}" for (s, z), n in sorted(needs.items()))
     if not needs:
         where = ", ".join(sorted({p["location_role"] for p in readable}))

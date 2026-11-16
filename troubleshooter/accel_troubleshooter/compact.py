@@ -185,10 +185,14 @@ def _quota_lines(qc: Dict[str, Any], plain: bool) -> List[str]:
         label = f"{r['model']:<24} need {need:>4}K"
         if scopes == {"Global"} and len(avails) == 1:
             avail = next(iter(avails))
-            flag = ok_i if avail is not None and avail >= (need or 0) else bad_i
+            first = rows[0][1]["ok"]
+            flag = ok_i if first else ("?" if first is None else bad_i)
             out.append(f"  • {label} · have {avail}K (one pool for every region) {flag}")
         else:
-            parts = [f"{region} {m['available']}{'' if m['ok'] else ' ' + bad_i}" for region, m in rows]
+            parts = [
+                f"{region} {m['available']}{'' if m['ok'] else ' ' + ('?' if m['ok'] is None else bad_i)}"
+                for region, m in rows
+            ]
             out.append(f"  • {label} · per region: " + " · ".join(parts))
     return out
 
@@ -201,13 +205,17 @@ def _recommend_region(d: Dict[str, Any]) -> Dict[str, Any]:
     cands = qev.get("regions_with_sufficient_quota") or []
     locs = (_check(d, "repo.config_drift") or {}).get("evidence", {}).get("allowed_locations") or []
     chosen = env_ev.get("ai_location")
+    picked_by = "your azd env choice"
+    if not chosen and qev.get("target_region"):
+        chosen, picked_by = qev["target_region"], "your choice (--region)"
 
     def headroom(region: str) -> int:  # per-region (Classic) quota is what differs between regions
         return sum(m["available"] or 0 for m in regions[region]["models"] if m["scope"] != "Global")
 
     ranked = sorted(cands, key=lambda r: (headroom(r), r in locs), reverse=True)
+    settled = False
     if chosen and chosen in cands:
-        region, why = chosen, "your azd env choice, quota OK"
+        region, why, settled = chosen, f"{picked_by}, quota OK", True
     elif chosen and chosen in regions:
         if ranked:
             region, why = ranked[0], f"{chosen} (your choice) is short on quota; {ranked[0]} has enough"
@@ -223,6 +231,7 @@ def _recommend_region(d: Dict[str, Any]) -> Dict[str, Any]:
         "why": why,
         "others": others,
         "chosen": chosen,
+        "settled": settled,
         "locations": locs,
         "env": env_ev,
         "ai_env": qev.get("ai_location_env") or "AZURE_ENV_AI_SERVICE_LOCATION",
@@ -260,7 +269,8 @@ def recommend_primary(d: Dict[str, Any]) -> Dict[str, Any]:
     if cc["status"] == "skip":
         return {**out, "state": "unchecked", "location": None, "why": cc["summary"]}
     if target and (table.get(target) or {}).get("status") == "ok":
-        return {**out, "state": "ok", "location": target, "why": "your azd env choice; App Service quota OK"}
+        who = "your choice (--location)" if ev.get("target_source") == "--location" else "your azd env choice"
+        return {**out, "state": "ok", "location": target, "why": f"{who}; App Service quota OK"}
     if target and (table.get(target) or {}).get("status") == "short":
         alt = next((r for r in cands if r != target), None)
         why = f"{target} (your choice) has no App Service quota for {out['needs']}"
@@ -310,8 +320,18 @@ def render_preflight(d: Dict[str, Any], plain: bool = False) -> str:
         return _finish("\n".join(out), plain)
     verdict = ("NO-GO" if plain else "🛑 NO-GO") if blocking else ("GO" if plain else "✅ GO")
     prim = recommend_primary(d)
-    if not blocking and prim["state"] == "unchecked":
-        verdict += " (models only; App Service quota not checked)"
+    unverified = ((_check(d, "repo.tools") or {}).get("evidence") or {}).get("unverified_required") or []
+    unresolved = ((_check(d, "quota.models") or {}).get("evidence") or {}).get("capacity_unresolved") or []
+    if not blocking:
+        caveats = []
+        if prim["state"] == "unchecked":
+            caveats.append("models only; App Service quota not checked")
+        if unresolved:
+            caveats.append("model capacity not resolved: " + ", ".join(unresolved))
+        if unverified:
+            caveats.append("prerequisites not verified: " + ", ".join(unverified))
+        if caveats:
+            verdict += " (" + "; ".join(caveats) + ")"
     out = [f"PREFLIGHT: {verdict} · {a.get('id', '?')} · subscription {sub} · {d['duration_ms'] / 1000:.0f}s"]
 
     qev = (_check(d, "quota.models") or {}).get("evidence", {})
@@ -337,13 +357,23 @@ def render_preflight(d: Dict[str, Any], plain: bool = False) -> str:
         out.append(f"  ▸ Primary location (apps, data): not chosen — allowed: {', '.join(rec['locations'])}")
     rows = (qev.get("regions") or {}).get(region or "", {}).get("models", []) if region else []
     if rows:
-        parts = [f"{r['model']} need {r['capacity']} / free {r['available']}{'' if r['ok'] else ' ❌'}" for r in rows]
+        parts = [
+            f"{r['model']} need {r['capacity']} / free {r['available']}"
+            + ("" if r["ok"] else (" ❔" if r["ok"] is None else " ❌"))
+            for r in rows
+        ]
         out.append("  ▸ Quota (K TPM, live from Azure): " + " · ".join(parts))
     cline = _compute_line(prim, plain) if prim["state"] in ("ok", "short") else None
     if cline:
         out.append(cline)
-    if rec["others"]:
-        out.append(f"  ▸ Other OK AI regions: {', '.join(rec['others'])}")
+    if rec["others"] and not rec["settled"]:
+        out.append(f"  ▸ Other OK AI regions: {', '.join(rec['others'])}")  # alternatives only when not settled
+    if env_ev.get("ai_location_conflict"):
+        cf = env_ev["ai_location_conflict"]
+        out.append(
+            f"  • Heads-up: .env {cf['env_key']}={cf['env']} but config.json {cf['param']}={cf['config']}; azd uses "
+            f"the .env value ({cf['env']}), which is what was checked"
+        )
 
     names = {
         "az.context": "login",
@@ -372,9 +402,13 @@ def render_preflight(d: Dict[str, Any], plain: bool = False) -> str:
                 continue
             have = r["installed"] or "not installed"
             need = f" (needs {r['required']})" if r.get("min") else ""
-            parts.append(f"{sym.get(r['status'], '')} {r['tool']} {have}{need}".strip())
+            label = r["name"] if r.get("kind") == "component" else r["tool"]
+            parts.append(f"{sym.get(r['status'], '')} {label} {have}{need}".strip())
         if parts:
-            out.append("  ▸ Tools (as the docs ask): " + " · ".join(parts))
+            route = f", {ev['route']} setup" if ev.get("route") else ""
+            out.append(f"  ▸ Tools (as the docs ask{route}): " + " · ".join(parts))
+        if ev.get("unverified_required"):
+            out.append(f"  ▸ Not verified (required): {', '.join(ev['unverified_required'])}")
         for e in ev.get("extensions", []):
             if not e["ok"]:
                 out.append(f"  ▸ Azure CLI extension '{e['name']}' is not installed (docs: {e['sources'][0]})")

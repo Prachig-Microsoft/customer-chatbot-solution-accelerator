@@ -397,6 +397,27 @@ prerequisite sections and version mentions in the README and deployment guides, 
 for the Dev Container route) is only informational. `az extension add --name X` lines in docs and scripts are checked
 against `az extension list`. Other tools found on the machine are listed as "also installed".
 
+**System prerequisites from the accelerator's own files** (`prereqscan.py`). Some needs are never written in a
+prerequisites list: for example a post-provision hook runs `pip install -r infra/scripts/.../requirements.txt`, that
+file lists `pyodbc`, and `pyodbc` needs the Microsoft ODBC Driver for SQL Server on the machine; only the Dev Container
+installs it. The scan reads the repository, not a hard-coded list per accelerator:
+- files the `azure.yaml` hooks use (and scripts they call) make a need **required** (`azd up` runs them);
+- other requirements files and scripts under `infra/` or `scripts/` make it **conditional** (needed when that script
+  runs);
+- app code under `src/` is ignored (it runs in its own image in Azure);
+- `.devcontainer/devcontainer.json` features give the documented version (for example `mssql-odbc-driver` 18) and show
+  that the Dev Container route installs it.
+
+The component is then read without running anything (Windows registry `ODBCINST.INI`, or `odbcinst.ini` on
+Linux/macOS). The setup route (local, Dev Container, Codespaces) is shown with the result. A required component that is
+missing or older than documented is a blocker; a conditional one is a warning; one that **could not be read** turns a GO
+into "GO (prerequisites not verified: …)", never a plain GO. Package-to-component mappings live in `NATIVE` in
+`prereqscan.py` (today `pyodbc`, `aioodbc` and `turbodbc`, all needing the ODBC driver); extend it to cover more.
+
+When the model capacity a template needs cannot be resolved (no literal default and no azd value), the quota is read
+but not compared: `quota.models` warns and the verdict says "GO (model capacity not resolved: …)". A region with no
+quota at all for that model is still a shortfall.
+
 ### Fabric capacity (`azure.fabric`, part of every health check)
 For accelerators that deploy a `Microsoft.Fabric/capacities` resource (or record `AZURE_FABRIC_CAPACITY_NAME`), the
 health check reads its state with `az resource show`: **Active** passes, **Paused** is a confirmed cause (Fabric items
@@ -439,8 +460,9 @@ operation, kept out of the approved-fix path (`apply_fix` cannot reach it), and 
    (subscription, group and every resource id).
 2. You type the exact group name (case-sensitive). Then you type `delete <name>`. Anything else deletes nothing.
 3. Right before deleting it reads the group again; if anything was added or removed, or the subscription changed, the
-   fingerprint differs and it refuses.
-4. It runs one command, `az group delete --name <name> --yes --no-wait`, waits until Azure reports the group gone (up to
+   fingerprint differs and it refuses. If you passed `--subscription` and az is signed in to another one, it refuses.
+4. It runs one command, `az group delete --name <name> --subscription <checked id> --yes --no-wait`, waits until Azure
+   reports the group gone (up to
    35 minutes, otherwise it says "still deleting"), lists soft-deleted AI accounts from that group with purge commands
    for you to run (it never purges), and appends a record to `.runs/deletions.jsonl`.
 

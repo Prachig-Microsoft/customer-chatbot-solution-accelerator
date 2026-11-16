@@ -79,6 +79,58 @@ LOCAL_TOOLS: Dict[str, Tuple[List[List[str]], str]] = {
     "kubectl": ([["kubectl", "version", "--client"]], r"Client Version: v(\d+(?:\.\d+)+)"),
 }
 
+# System components a package or script needs on the machine, read without running anything (registry / config file).
+SYSTEM_COMPONENTS = {"odbc-sql": "Microsoft ODBC Driver for SQL Server"}
+_ODBC_SQL = re.compile(r"ODBC Driver (\d+) for SQL Server", re.I)
+
+
+def _probe_component(component: str) -> Tuple[str, Optional[str], str]:
+    """(state, version, how it was read). Only fixed, read-only sources."""
+    import os
+    import sys
+
+    if component == "odbc-sql":
+        names: List[str] = []
+        if sys.platform == "win32":
+            how = r"registry HKLM\SOFTWARE\ODBC\ODBCINST.INI\ODBC Drivers (read)"
+            try:
+                import winreg
+
+                with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\ODBC\ODBCINST.INI\ODBC Drivers") as key:
+                    i = 0
+                    while True:
+                        try:
+                            name, value, _ = winreg.EnumValue(key, i)
+                        except OSError:
+                            break
+                        if str(value).lower() == "installed":
+                            names.append(name)
+                        i += 1
+            except OSError:
+                return "unknown", None, how
+        else:
+            files = [
+                Path(os.environ.get("ODBCSYSINI", "/etc")) / "odbcinst.ini",
+                Path("/etc/odbcinst.ini"),
+                Path("/usr/local/etc/odbcinst.ini"),
+                Path("/opt/homebrew/etc/odbcinst.ini"),
+            ]
+            how = "odbcinst.ini (read): " + ", ".join(dict.fromkeys(str(f) for f in files))
+            readable = False
+            for f in dict.fromkeys(files):
+                try:
+                    text = f.read_text(encoding="utf-8", errors="ignore")
+                except OSError:
+                    continue
+                readable = True
+                names += re.findall(r"^\s*\[([^\]]+)\]", text, re.M)
+            if not readable:
+                return "missing", None, how  # no ODBC driver manager configuration at all
+        versions = sorted((int(m.group(1)) for n in names for m in [_ODBC_SQL.search(n)] if m), reverse=True)
+        return ("found", str(versions[0]), how) if versions else ("missing", None, how)
+    return "unknown", None, "not supported"
+
+
 ALLOWED_HTTP_HOST_SUFFIXES = (".azurewebsites.net", "localhost", "127.0.0.1")
 
 
@@ -182,7 +234,7 @@ def is_read_only(args: List[str]) -> bool:
     if args and args[0] == "rest":
         return _rest_allowed(args)
     joined = " ".join(a for a in args if not a.startswith("-"))
-    return any(joined.startswith(p) for p in READ_ONLY_PREFIXES)
+    return any(joined == p or joined.startswith(p + " ") for p in READ_ONLY_PREFIXES)  # whole words only
 
 
 def _excerpt(stdout: str, stderr: str, limit: int = 1200) -> str:
@@ -271,6 +323,26 @@ class AzRunner:
                 "stderr": data.get("error") if not ok else "",
             }
         return ok, data, rec
+
+    def system_component(self, component: str) -> Tuple[str, Optional[str], CommandRecord]:
+        """Is a known system component installed? Read-only: registry or config files, no commands are run.
+
+        Returns ("found", "18") / ("missing", None) / ("unknown", None).
+        """
+        if component not in SYSTEM_COMPONENTS:
+            raise CommandNotAllowed(f"system component not allowed: {component}")
+        start = time.time()
+        state, version, how = _probe_component(component)
+        rec = CommandRecord(
+            how,
+            0 if state == "found" else None,
+            _now(),
+            int((time.time() - start) * 1000),
+            f"{state}{' ' + version if version else ''}",
+            source="live",
+        )
+        self._log(rec)
+        return state, version, rec
 
     def local_version(self, tool: str, timeout: int = 20) -> Tuple[str, Optional[str], CommandRecord]:
         """Installed version of a known local tool: ("found", "1.2.3") / ("missing", None) / ("unknown", None)."""
@@ -469,6 +541,20 @@ class ReplayRunner(AzRunner):
         self._log(rec)
         return ok, data, rec
 
+    def system_component(self, component: str):
+        if component not in SYSTEM_COMPONENTS:
+            raise CommandNotAllowed(f"system component not allowed: {component}")
+        fx = self._lookup(f"SYSTEM {component}")
+        if fx is None:
+            rec = CommandRecord(f"system {component}", None, _now(), 0, "no fixture", source="replay-missing")
+            self._log(rec)
+            return "unknown", None, rec
+        ok = fx.get("exit_code", 0) == 0
+        version = str(fx.get("stdout")) if ok and fx.get("stdout") is not None else None
+        rec = CommandRecord(f"system {component}", 0 if ok else 1, _now(), 0, "found" if ok else "missing", "replay")
+        self._log(rec)
+        return ("found", version, rec) if ok else ("missing", None, rec)
+
     def local_version(self, tool: str, timeout: int = 20):
         if tool not in LOCAL_TOOLS:
             raise CommandNotAllowed(f"local tool not allowed: {tool}")
@@ -548,6 +634,10 @@ class OfflineRunner(AzRunner):
 
     def local_version(self, tool, timeout=20):
         rec = CommandRecord(tool, None, _now(), 0, "offline mode: not executed", source="skipped")
+        return "unknown", None, rec
+
+    def system_component(self, component):
+        rec = CommandRecord(component, None, _now(), 0, "offline mode: not read", source="skipped")
         return "unknown", None, rec
 
     def http_get(self, url, timeout=20):

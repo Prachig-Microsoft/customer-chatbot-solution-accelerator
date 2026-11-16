@@ -725,7 +725,7 @@ def test_preflight_go_is_a_short_answer_with_a_recommended_region(synthetic_fixt
     assert lines[0].startswith("PREFLIGHT: ✅ GO")
     assert "▸ AI region (models): eastus2 — your azd env choice, quota OK" in text
     assert "▸ Quota (K TPM, live from Azure):" in text and "need 50 / free 900" in text
-    assert "• Blocking: none" in text and "▸ Other OK AI regions:" in text
+    assert "• Blocking: none" in text and "▸ Other OK AI regions:" not in text  # settled: no alternatives
     assert "run -- azd up" in text and "azd env set" not in text  # region already chosen: nothing to set
 
 
@@ -1024,3 +1024,39 @@ def test_cli_run_refuses_disallowed_commands(capsys):
 def test_mcp_never_prompts_or_runs_commands():
     src = (TOOL_ROOT / "accel_troubleshooter" / "mcp_server.py").read_text(encoding="utf-8")
     assert "prompt_rg" not in src and "runcmd" not in src
+
+
+def test_an_unresolved_model_capacity_is_never_a_plain_go(synthetic_fixture, synthetic_env_file, monkeypatch):
+    from accel_troubleshooter.diagnostics import azure_checks
+
+    real = azure_checks.effective_model_requirements
+
+    def unresolved(ctx):
+        return [{**r, "capacity": None} if r["role"] == "chat" else r for r in real(ctx)]
+
+    monkeypatch.setattr(azure_checks, "effective_model_requirements", unresolved)
+    text, d = _preflight(synthetic_fixture, synthetic_env_file)
+    q = next(c for c in d.checks if c.check_id == "quota.models")
+    assert q.status == "warn" and "could not be resolved" in q.summary
+    assert "model capacity not resolved" in text.splitlines()[0] and "❔" in text
+
+
+def test_an_unresolved_capacity_with_no_quota_at_all_is_still_a_shortfall(monkeypatch):
+    from types import SimpleNamespace
+
+    from accel_troubleshooter.diagnostics import azure_checks
+
+    req = {
+        "role": "chat",
+        "model": "gpt-x",
+        "sku": "GlobalStandard",
+        "capacity": None,
+        "usage_name": "OpenAI.GlobalStandard.gpt-x",
+        "capacity_source": "?",
+        "capacity_env": None,
+    }
+    usage = [{"name": {"value": "OpenAI.GlobalStandard.gpt-x"}, "currentValue": 0, "limit": 0}]
+    monkeypatch.setattr(azure_checks, "effective_model_requirements", lambda c: [req])
+    monkeypatch.setattr(azure_checks, "_usage_for_region", lambda c, r: (r, True, usage, None))
+    t = azure_checks.quota_table(SimpleNamespace(), ["eastus"])
+    assert t["eastus"]["models"][0]["ok"] is False and not t["eastus"]["all_ok"]

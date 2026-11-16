@@ -135,3 +135,85 @@ def test_models_the_bicep_mentions_but_we_could_not_read_are_not_waved_through(t
         encoding="utf-8",
     )
     assert "no_model_quota" not in derive_profile(tmp_path)["iac"]  # a model is deployed: quota must be checked
+
+
+INLINE = """targetScope = 'resourceGroup'
+param location string
+param chatDeploymentName string = 'gpt-5.2'
+param embeddingCapacity int = 80
+param otherCapacity int
+module aiServices 'br/public:avm/res/cognitive-services/account:0.13.0' = {
+  params: {
+    location: location
+    deployments: [
+      {
+        name: chatDeploymentName
+        model: {
+          format: 'OpenAI'
+          name: chatDeploymentName
+          version: '2025-12-11'
+        }
+        sku: {
+          name: 'GlobalStandard'
+          capacity: 150
+        }
+      }
+      {
+        model: {
+          format: 'OpenAI'
+          name: 'text-embedding-3-small'
+          version: '1'
+        }
+        sku: {
+          name: 'Standard'
+          capacity: embeddingCapacity
+        }
+      }
+      {
+        model: {
+          format: 'OpenAI'
+          name: 'gpt-x'
+        }
+        sku: {
+          name: 'GlobalStandard'
+          capacity: otherCapacity
+        }
+      }
+      {
+        model: {
+          format: 'Microsoft'
+          name: 'phi'
+        }
+        sku: {
+          name: 'GlobalStandard'
+          capacity: 1
+        }
+      }
+    ]
+  }
+}
+resource plan 'Microsoft.Web/serverfarms@2024-04-01' = {
+  name: 'asp'
+  location: location
+  sku: { name: 'B1', capacity: 1 }
+}
+"""
+
+
+def test_models_written_inline_are_found_when_there_is_no_usage_name_metadata(tmp_path):
+    (tmp_path / "infra").mkdir()
+    (tmp_path / "infra" / "main.bicep").write_text(INLINE, encoding="utf-8")
+    (tmp_path / "azure.yaml").write_text("name: inline-demo\n", encoding="utf-8")
+    p = derive_profile(tmp_path)
+    models = {m["name_fixed"]: m for m in p["iac"]["models"]}
+    assert set(models) == {"gpt-5.2", "text-embedding-3-small", "gpt-x"}  # the non-OpenAI one is not quota-checked
+    assert models["gpt-5.2"]["capacity_fixed"] == 150 and models["gpt-5.2"]["sku_fixed"] == "GlobalStandard"
+    assert models["text-embedding-3-small"]["capacity_fixed"] == 80  # a parameter with a literal default
+    assert models["gpt-x"]["capacity_fixed"] is None  # unresolved: compared as "not resolved", never as 0
+    # no separate AI-region parameter: the models go to the primary location
+    assert p["iac"]["ai_location_param"] == "location" and p["azd_env_keys"]["ai_location"] == "AZURE_LOCATION"
+    assert "inline deployments" in p["iac"]["models_from"]
+    ts = Troubleshooter(tmp_path, OfflineRunner())
+    d = ts.diagnose("preflight", log=False, only_checks=["quota.compute"])
+    c = next(x for x in d.checks if x.check_id == "quota.compute")
+    assert "not in the primary location" not in c.summary  # one shared location is the primary location
